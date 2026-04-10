@@ -1,4 +1,7 @@
-import { Controller, Get, Query } from '@nestjs/common';
+import { Controller, Get, Query, UseGuards } from '@nestjs/common';
+import { CurrentUser } from '../../shared/decorators/current-user.decorator';
+import { JwtAuthGuard } from '../../shared/guards/jwt-auth.guard';
+import { JwtUser } from '../../shared/interfaces/jwt-user.interface';
 import { FeedService } from './feed.service';
 import { FeedQueryDto } from './dto/feed-query.dto';
 
@@ -14,6 +17,12 @@ export class FeedController {
   @Get('trending')
   getTrendingSummary() {
     return this.feedService.getTrendingSummary();
+  }
+
+  @Get('following')
+  @UseGuards(JwtAuthGuard)
+  getFollowing(@CurrentUser() user: JwtUser, @Query() query: FeedQueryDto) {
+    return this.feedService.getFollowingFeed(user.sub, query);
   }
 }
 

@@ -15,6 +15,17 @@ export class ReelsController {
     return this.reelsService.findNearby(query);
   }
 
+  @Get('trending')
+  findTrending(@Query() query: GeoQueryDto) {
+    return this.reelsService.findTrending(query);
+  }
+
+  @Get('for-you')
+  @UseGuards(JwtAuthGuard)
+  findForYou(@CurrentUser() user: JwtUser, @Query() query: GeoQueryDto) {
+    return this.reelsService.findForYou(user, query);
+  }
+
   @Post()
   @UseGuards(JwtAuthGuard)
   create(@CurrentUser() user: JwtUser, @Body() payload: CreateReelDto) {

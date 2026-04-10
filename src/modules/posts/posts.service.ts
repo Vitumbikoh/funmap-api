@@ -1,10 +1,11 @@
-import { Injectable } from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Point } from 'geojson';
 import { Repository } from 'typeorm';
 import { GeoQueryDto } from '../../shared/dto/geo-query.dto';
 import { JwtUser } from '../../shared/interfaces/jwt-user.interface';
 import { CreatePostDto } from './dto/create-post.dto';
+import { UpdatePostDto } from './dto/update-post.dto';
 import { Post } from './entities/post.entity';
 
 @Injectable()
@@ -64,6 +65,85 @@ export class PostsService {
       `,
       [query.longitude, query.latitude, query.radiusKm ?? 10],
     );
+  }
+
+  async update(user: JwtUser, postId: string, payload: UpdatePostDto) {
+    const post = await this.getOwnedPost(user.sub, postId);
+
+    if (payload.caption !== undefined) {
+      post.caption = payload.caption;
+    }
+
+    if (payload.mediaIds !== undefined) {
+      post.mediaIds = payload.mediaIds;
+    }
+
+    if (payload.visibility !== undefined) {
+      post.visibility = payload.visibility;
+    }
+
+    if (payload.visibilityRadiusKm !== undefined) {
+      post.visibilityRadiusKm = payload.visibilityRadiusKm;
+    }
+
+    if (payload.hashtags !== undefined) {
+      post.hashtags = payload.hashtags.map((tag) =>
+        tag.trim().toLowerCase().replace(/^#/, ''),
+      );
+    }
+
+    if (payload.moodTag !== undefined) {
+      post.moodTag = payload.moodTag;
+    }
+
+    if (payload.township !== undefined) {
+      post.township = payload.township;
+    }
+
+    if (payload.district !== undefined) {
+      post.district = payload.district;
+    }
+
+    if (payload.region !== undefined) {
+      post.region = payload.region;
+    }
+
+    if (payload.country !== undefined) {
+      post.country = payload.country;
+    }
+
+    if (payload.latitude !== undefined && payload.longitude !== undefined) {
+      post.location = {
+        type: 'Point',
+        coordinates: [payload.longitude, payload.latitude],
+      } as Point;
+    }
+
+    return this.postsRepository.save(post);
+  }
+
+  async remove(user: JwtUser, postId: string) {
+    const post = await this.getOwnedPost(user.sub, postId);
+    await this.postsRepository.remove(post);
+
+    return {
+      id: postId,
+      deleted: true,
+    };
+  }
+
+  private async getOwnedPost(userId: string, postId: string) {
+    const post = await this.postsRepository.findOne({ where: { id: postId } });
+
+    if (!post) {
+      throw new NotFoundException('Post not found');
+    }
+
+    if (post.authorId !== userId) {
+      throw new ForbiddenException('You can only modify your own posts');
+    }
+
+    return post;
   }
 }
 

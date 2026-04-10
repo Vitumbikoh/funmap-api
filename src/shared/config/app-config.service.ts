@@ -54,5 +54,13 @@ export class AppConfigService {
       apiSecret: this.configService.get<string>('cloudinary.apiSecret', ''),
     };
   }
+
+  get fcmConfig() {
+    return {
+      projectId: this.configService.get<string>('fcm.projectId', ''),
+      clientEmail: this.configService.get<string>('fcm.clientEmail', ''),
+      privateKey: this.configService.get<string>('fcm.privateKey', ''),
+    };
+  }
 }
 

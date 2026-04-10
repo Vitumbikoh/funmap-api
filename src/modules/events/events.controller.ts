@@ -1,8 +1,11 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
+  ParseUUIDPipe,
+  Patch,
   Post,
   Query,
   UseGuards,
@@ -12,6 +15,7 @@ import { GeoQueryDto } from '../../shared/dto/geo-query.dto';
 import { JwtAuthGuard } from '../../shared/guards/jwt-auth.guard';
 import { JwtUser } from '../../shared/interfaces/jwt-user.interface';
 import { CreateEventDto } from './dto/create-event.dto';
+import { UpdateEventDto } from './dto/update-event.dto';
 import { EventsService } from './events.service';
 
 @Controller('events')
@@ -24,7 +28,7 @@ export class EventsController {
   }
 
   @Get(':id')
-  findOne(@Param('id') id: string) {
+  findOne(@Param('id', new ParseUUIDPipe()) id: string) {
     return this.eventsService.findOne(id);
   }
 
@@ -36,8 +40,27 @@ export class EventsController {
 
   @Post(':id/rsvp')
   @UseGuards(JwtAuthGuard)
-  rsvp(@CurrentUser() user: JwtUser, @Param('id') id: string) {
+  rsvp(@CurrentUser() user: JwtUser, @Param('id', new ParseUUIDPipe()) id: string) {
     return this.eventsService.rsvp(user, id);
+  }
+
+  @Patch(':id')
+  @UseGuards(JwtAuthGuard)
+  update(
+    @CurrentUser() user: JwtUser,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() payload: UpdateEventDto,
+  ) {
+    return this.eventsService.update(user, id, payload);
+  }
+
+  @Delete(':id')
+  @UseGuards(JwtAuthGuard)
+  cancel(
+    @CurrentUser() user: JwtUser,
+    @Param('id', new ParseUUIDPipe()) id: string,
+  ) {
+    return this.eventsService.cancel(user, id);
   }
 }
 

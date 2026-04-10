@@ -1,4 +1,4 @@
-import { Body, Controller, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
 import { CurrentUser } from '../../shared/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../../shared/guards/jwt-auth.guard';
 import { JwtUser } from '../../shared/interfaces/jwt-user.interface';
@@ -9,6 +9,11 @@ import { MediaService } from './media.service';
 @UseGuards(JwtAuthGuard)
 export class MediaController {
   constructor(private readonly mediaService: MediaService) {}
+
+  @Get(':id')
+  findOne(@CurrentUser() user: JwtUser, @Param('id') id: string) {
+    return this.mediaService.findOneForUser(user, id);
+  }
 
   @Post('upload-intents')
   createUploadIntent(

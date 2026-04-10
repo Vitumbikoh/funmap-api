@@ -52,5 +52,10 @@ export class ChatController {
   ) {
     return this.chatService.sendMessage(user, roomId, payload);
   }
+
+  @Post('rooms/:roomId/read')
+  markRoomAsRead(@CurrentUser() user: JwtUser, @Param('roomId') roomId: string) {
+    return this.chatService.markRoomAsRead(user, roomId);
+  }
 }
 

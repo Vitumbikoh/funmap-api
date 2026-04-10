@@ -37,5 +37,17 @@ export class ChatGateway {
   emitMessage(roomId: string, payload: Record<string, unknown>) {
     this.server.to(roomId).emit('message:new', payload);
   }
+
+  emitReadReceipt(
+    roomId: string,
+    payload: {
+      roomId: string;
+      userId: string;
+      readAt: string;
+      messageIds: string[];
+    },
+  ) {
+    this.server.to(roomId).emit('message:read', payload);
+  }
 }
 
