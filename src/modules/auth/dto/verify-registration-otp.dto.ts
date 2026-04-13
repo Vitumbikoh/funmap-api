@@ -2,11 +2,11 @@ import { IsOptional, IsPhoneNumber, IsString, Length } from 'class-validator';
 
 export class VerifyRegistrationOtpDto {
   @IsPhoneNumber()
-  phoneNumber: string;
+  phoneNumber!: string;
 
   @IsString()
   @Length(4, 6)
-  code: string;
+  code!: string;
 
   @IsOptional()
   @IsString()

@@ -4,12 +4,12 @@ export class CredentialLoginDto {
   @IsString()
   @MinLength(2)
   @MaxLength(60)
-  identifier: string;
+  identifier!: string;
 
   @IsString()
   @MinLength(8)
   @MaxLength(72)
-  password: string;
+  password!: string;
 
   @IsOptional()
   @IsString()

@@ -2,11 +2,11 @@ import { IsOptional, IsPhoneNumber, IsString, MaxLength, MinLength } from 'class
 
 export class RegisterRequestOtpDto {
   @IsPhoneNumber()
-  phoneNumber: string;
+  phoneNumber!: string;
 
   @IsString()
   @MaxLength(100)
-  displayName: string;
+  displayName!: string;
 
   @IsOptional()
   @IsString()
@@ -16,5 +16,5 @@ export class RegisterRequestOtpDto {
   @IsString()
   @MinLength(8)
   @MaxLength(72)
-  password: string;
+  password!: string;
 }
