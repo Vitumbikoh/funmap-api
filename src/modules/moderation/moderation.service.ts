@@ -138,10 +138,6 @@ export class ModerationService {
   }
 
   async resolveReport(adminUser: JwtUser, reportId: string, payload: ResolveReportDto) {
-    if (payload.status === ReportStatus.OPEN) {
-      throw new BadRequestException('Resolution status must be RESOLVED or DISMISSED');
-    }
-
     const report = await this.reportsRepository.findOne({
       where: { id: reportId },
     });
@@ -206,10 +202,6 @@ export class ModerationService {
   }
 
   async resolveReportsBulk(adminUser: JwtUser, payload: BulkResolveReportsDto) {
-    if (payload.status === ReportStatus.OPEN) {
-      throw new BadRequestException('Resolution status must be RESOLVED or DISMISSED');
-    }
-
     const uniqueIds = Array.from(new Set(payload.ids));
     if (!uniqueIds.length) {
       return { updated: 0, skipped: 0, skippedIds: [] as string[] };

@@ -14,7 +14,7 @@ export function databaseConfigFactory(
     password: database.password,
     database: database.database,
     autoLoadEntities: true,
-    synchronize: false,
+    synchronize: database.synchronize,
     logging: false,
   };
 }

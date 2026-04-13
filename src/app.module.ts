@@ -21,6 +21,7 @@ import { PromotionsModule } from './modules/promotions/promotions.module';
 import { ReelsModule } from './modules/reels/reels.module';
 import { SearchModule } from './modules/search/search.module';
 import { UsersModule } from './modules/users/users.module';
+import { AppConfigModule } from './shared/config/app-config.module';
 import { AppConfigService } from './shared/config/app-config.service';
 import { appConfig } from './shared/config/app.config';
 import { databaseConfigFactory } from './shared/database/database.config';
@@ -31,6 +32,7 @@ import { databaseConfigFactory } from './shared/database/database.config';
       isGlobal: true,
       load: [appConfig],
     }),
+    AppConfigModule,
     ThrottlerModule.forRoot([
       {
         ttl: 60_000,
@@ -61,7 +63,6 @@ import { databaseConfigFactory } from './shared/database/database.config';
     CheckinsModule,
   ],
   providers: [
-    AppConfigService,
     {
       provide: APP_GUARD,
       useClass: ThrottlerGuard,

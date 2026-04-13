@@ -13,7 +13,8 @@
     "incremental": true,
     "skipLibCheck": true,
     "strict": true,
-    "ignoreDeprecations": "6.0",
+    "strictPropertyInitialization": false,
+    "ignoreDeprecations": "5.0",
     "moduleResolution": "node",
     "types": []
   },

@@ -103,7 +103,9 @@ export class FcmService {
     const normalizedPrivateKey = privateKey.replace(/\\n/g, '\n');
     const appName = 'funmap-fcm';
 
-    const existing = admin.apps.find((app) => app.name === appName);
+    const existing = admin.apps.find(
+      (app): app is admin.app.App => app != null && app.name === appName,
+    );
     const app =
       existing ??
       admin.initializeApp(
