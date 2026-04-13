@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -11,8 +12,11 @@ import { AppConfigService } from '../../shared/config/app-config.service';
 import { Role } from '../../shared/enums/role.enum';
 import { JwtUser } from '../../shared/interfaces/jwt-user.interface';
 import { User } from '../users/entities/user.entity';
+import { CredentialLoginDto } from './dto/credential-login.dto';
+import { RegisterRequestOtpDto } from './dto/register-request-otp.dto';
 import { RequestOtpDto } from './dto/request-otp.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
+import { VerifyRegistrationOtpDto } from './dto/verify-registration-otp.dto';
 import { OtpCode } from './entities/otp-code.entity';
 import { Session } from './entities/session.entity';
 
@@ -29,49 +33,124 @@ export class AuthService {
     private readonly configService: AppConfigService,
   ) {}
 
-  async requestOtp(payload: RequestOtpDto) {
-    const code = `${Math.floor(100000 + Math.random() * 900000)}`;
-    const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+  async requestRegistrationOtp(payload: RegisterRequestOtpDto) {
+    const normalizedPhoneNumber = payload.phoneNumber.trim();
+    const normalizedUsername = payload.username?.trim().toLowerCase();
 
-    const otp = this.otpCodesRepository.create({
-      phoneNumber: payload.phoneNumber,
-      code,
-      purpose: payload.purpose ?? 'LOGIN',
-      expiresAt,
+    const existingByPhone = await this.usersRepository.findOne({
+      where: { phoneNumber: normalizedPhoneNumber },
     });
 
-    await this.otpCodesRepository.save(otp);
+    if (existingByPhone?.isVerified) {
+      throw new ConflictException('An account already exists for this phone number.');
+    }
+
+    if (normalizedUsername) {
+      const existingByUsername = await this.usersRepository.findOne({
+        where: { username: normalizedUsername },
+      });
+
+      if (
+        existingByUsername &&
+        existingByUsername.phoneNumber !== normalizedPhoneNumber
+      ) {
+        throw new ConflictException('Username is already taken.');
+      }
+    }
+
+    const passwordHash = await bcrypt.hash(payload.password, 10);
+
+    const user = this.usersRepository.create({
+      ...(existingByPhone ?? {}),
+      phoneNumber: normalizedPhoneNumber,
+      displayName: payload.displayName.trim(),
+      username: normalizedUsername,
+      passwordHash,
+      roles: [Role.CLIENT],
+      isVerified: false,
+      lastActiveAt: new Date(),
+    });
+
+    await this.usersRepository.save(user);
+
+    const otpPayload = await this.issueOtp(normalizedPhoneNumber, 'REGISTER');
+
+    return {
+      message: 'Registration OTP created',
+      phoneNumber: normalizedPhoneNumber,
+      expiresAt: otpPayload.expiresAt,
+      debugCode: otpPayload.debugCode,
+    };
+  }
+
+  async verifyRegistrationOtp(payload: VerifyRegistrationOtpDto) {
+    const normalizedPhoneNumber = payload.phoneNumber.trim();
+
+    await this.validateOtp({
+      phoneNumber: normalizedPhoneNumber,
+      code: payload.code,
+      purpose: 'REGISTER',
+    });
+
+    const user = await this.usersRepository.findOne({
+      where: { phoneNumber: normalizedPhoneNumber },
+    });
+
+    if (!user) {
+      throw new BadRequestException('Registration details not found.');
+    }
+
+    if (!user.passwordHash) {
+      throw new BadRequestException('Password is not set for this account.');
+    }
+
+    user.isVerified = true;
+    user.lastActiveAt = new Date();
+    const savedUser = await this.usersRepository.save(user);
+
+    return this.createSession(savedUser, payload.deviceId);
+  }
+
+  async loginWithCredentials(payload: CredentialLoginDto) {
+    const identifier = payload.identifier.trim();
+
+    const user = await this.usersRepository.findOne({
+      where: [{ phoneNumber: identifier }, { username: identifier.toLowerCase() }],
+    });
+
+    if (!user || !user.passwordHash) {
+      throw new UnauthorizedException('Invalid credentials.');
+    }
+
+    if (!user.isVerified) {
+      throw new UnauthorizedException('Complete OTP verification first.');
+    }
+
+    const isPasswordValid = await bcrypt.compare(payload.password, user.passwordHash);
+    if (!isPasswordValid) {
+      throw new UnauthorizedException('Invalid credentials.');
+    }
+
+    user.lastActiveAt = new Date();
+    const savedUser = await this.usersRepository.save(user);
+
+    return this.createSession(savedUser, payload.deviceId);
+  }
+
+  async requestOtp(payload: RequestOtpDto) {
+    const purpose = payload.purpose ?? 'LOGIN';
+    const otpPayload = await this.issueOtp(payload.phoneNumber, purpose);
 
     return {
       message: 'OTP created',
       phoneNumber: payload.phoneNumber,
-      expiresAt,
-      debugCode:
-        process.env.APP_ENV === 'production' ? undefined : code,
+      expiresAt: otpPayload.expiresAt,
+      debugCode: otpPayload.debugCode,
     };
   }
 
   async verifyOtp(payload: VerifyOtpDto) {
-    const otp = await this.otpCodesRepository.findOne({
-      where: {
-        phoneNumber: payload.phoneNumber,
-        purpose: payload.purpose ?? 'LOGIN',
-      },
-      order: {
-        createdAt: 'DESC',
-      },
-    });
-
-    if (!otp || otp.consumedAt || otp.expiresAt.getTime() < Date.now()) {
-      throw new UnauthorizedException('OTP is invalid or expired');
-    }
-
-    if (otp.code !== payload.code) {
-      throw new UnauthorizedException('OTP is invalid');
-    }
-
-    otp.consumedAt = new Date();
-    await this.otpCodesRepository.save(otp);
+    await this.validateOtp(payload);
 
     let user = await this.usersRepository.findOne({
       where: { phoneNumber: payload.phoneNumber },
@@ -180,6 +259,52 @@ export class AuthService {
       accessToken,
       refreshToken,
     };
+  }
+
+  private async issueOtp(phoneNumber: string, purpose: string) {
+    const code = `${Math.floor(100000 + Math.random() * 900000)}`;
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+
+    const otp = this.otpCodesRepository.create({
+      phoneNumber,
+      code,
+      purpose,
+      expiresAt,
+    });
+
+    await this.otpCodesRepository.save(otp);
+
+    return {
+      expiresAt,
+      debugCode: process.env.APP_ENV === 'production' ? undefined : code,
+    };
+  }
+
+  private async validateOtp(payload: {
+    phoneNumber: string;
+    code: string;
+    purpose?: string;
+  }) {
+    const otp = await this.otpCodesRepository.findOne({
+      where: {
+        phoneNumber: payload.phoneNumber,
+        purpose: payload.purpose ?? 'LOGIN',
+      },
+      order: {
+        createdAt: 'DESC',
+      },
+    });
+
+    if (!otp || otp.consumedAt || otp.expiresAt.getTime() < Date.now()) {
+      throw new UnauthorizedException('OTP is invalid or expired');
+    }
+
+    if (otp.code !== payload.code) {
+      throw new UnauthorizedException('OTP is invalid');
+    }
+
+    otp.consumedAt = new Date();
+    await this.otpCodesRepository.save(otp);
   }
 }
 

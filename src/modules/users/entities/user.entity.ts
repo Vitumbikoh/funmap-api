@@ -13,6 +13,9 @@ export class User extends BaseEntity {
   @Index({ unique: true })
   phoneNumber: string;
 
+  @Column({ name: 'password_hash', type: 'varchar', length: 100, nullable: true })
+  passwordHash?: string | null;
+
   @Column({ type: 'varchar', length: 60, unique: true, nullable: true })
   @Index({ unique: true })
   username?: string | null;
