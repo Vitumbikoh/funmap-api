@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { CurrentUser } from '../../shared/decorators/current-user.decorator';
 import { GeoQueryDto } from '../../shared/dto/geo-query.dto';
 import { JwtUser } from '../../shared/interfaces/jwt-user.interface';
@@ -17,7 +17,7 @@ export class UsersController {
   }
 
   @Get('nearby')
-  getNearbyUsers(@CurrentUser() user: JwtUser, query: GeoQueryDto) {
+  getNearbyUsers(@CurrentUser() user: JwtUser, @Query() query: GeoQueryDto) {
     return this.usersService.findNearbyUsers(user.sub, query);
   }
 
