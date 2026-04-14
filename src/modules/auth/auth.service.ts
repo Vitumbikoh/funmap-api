@@ -7,7 +7,7 @@ import {
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import * as bcrypt from 'bcrypt';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { AppConfigService } from '../../shared/config/app-config.service';
 import { Role } from '../../shared/enums/role.enum';
 import { JwtUser } from '../../shared/interfaces/jwt-user.interface';
@@ -62,12 +62,10 @@ export class AuthService {
       throw new UnauthorizedException('Invalid admin registration secret.');
     }
 
-    const normalizedPhoneNumber = payload.phoneNumber.trim();
+    const normalizedPhoneNumber = this.normalizePhoneNumber(payload.phoneNumber);
     const normalizedUsername = payload.username.trim().toLowerCase();
 
-    const existingByPhone = await this.usersRepository.findOne({
-      where: { phoneNumber: normalizedPhoneNumber },
-    });
+    const existingByPhone = await this.findUserByPhoneNumber(normalizedPhoneNumber);
 
     if (existingByPhone) {
       throw new ConflictException('Phone number is already registered.');
@@ -111,12 +109,10 @@ export class AuthService {
     payload: RegisterRequestOtpDto,
     roles: Role[],
   ) {
-    const normalizedPhoneNumber = payload.phoneNumber.trim();
+    const normalizedPhoneNumber = this.normalizePhoneNumber(payload.phoneNumber);
     const normalizedUsername = payload.username?.trim().toLowerCase();
 
-    const existingByPhone = await this.usersRepository.findOne({
-      where: { phoneNumber: normalizedPhoneNumber },
-    });
+    const existingByPhone = await this.findUserByPhoneNumber(normalizedPhoneNumber);
 
     if (existingByPhone?.isVerified) {
       throw new ConflictException('An account already exists for this phone number.');
@@ -161,7 +157,7 @@ export class AuthService {
   }
 
   async verifyRegistrationOtp(payload: VerifyRegistrationOtpDto) {
-    const normalizedPhoneNumber = payload.phoneNumber.trim();
+    const normalizedPhoneNumber = this.normalizePhoneNumber(payload.phoneNumber);
 
     await this.validateOtp({
       phoneNumber: normalizedPhoneNumber,
@@ -169,9 +165,7 @@ export class AuthService {
       purpose: 'REGISTER',
     });
 
-    const user = await this.usersRepository.findOne({
-      where: { phoneNumber: normalizedPhoneNumber },
-    });
+    const user = await this.findUserByPhoneNumber(normalizedPhoneNumber);
 
     if (!user) {
       throw new BadRequestException('Registration details not found.');
@@ -191,8 +185,14 @@ export class AuthService {
   async loginWithCredentials(payload: CredentialLoginDto) {
     const identifier = payload.identifier.trim();
 
+    const possiblePhone = this.normalizePhoneNumber(identifier);
+    const phoneAliases = this.getPhoneAliases(possiblePhone);
+
     const user = await this.usersRepository.findOne({
-      where: [{ phoneNumber: identifier }, { username: identifier.toLowerCase() }],
+      where: [
+        { phoneNumber: In(phoneAliases) },
+        { username: identifier.toLowerCase() },
+      ],
     });
 
     if (!user || !user.passwordHash) {
@@ -216,7 +216,7 @@ export class AuthService {
 
   async requestOtp(payload: RequestOtpDto) {
     const purpose = payload.purpose ?? 'LOGIN';
-    const otpPayload = await this.issueOtp(payload.phoneNumber, purpose);
+    const otpPayload = await this.issueOtp(this.normalizePhoneNumber(payload.phoneNumber), purpose);
 
     return {
       message: 'OTP created',
@@ -227,15 +227,15 @@ export class AuthService {
   }
 
   async verifyOtp(payload: VerifyOtpDto) {
-    await this.validateOtp(payload);
+    const normalizedPhoneNumber = this.normalizePhoneNumber(payload.phoneNumber);
 
-    let user = await this.usersRepository.findOne({
-      where: { phoneNumber: payload.phoneNumber },
-    });
+    await this.validateOtp({ ...payload, phoneNumber: normalizedPhoneNumber });
+
+    let user = await this.findUserByPhoneNumber(normalizedPhoneNumber);
 
     if (!user) {
       user = this.usersRepository.create({
-        phoneNumber: payload.phoneNumber,
+        phoneNumber: normalizedPhoneNumber,
         roles: [Role.CLIENT],
         isVerified: true,
         lastActiveAt: new Date(),
@@ -342,8 +342,10 @@ export class AuthService {
     const code = `${Math.floor(100000 + Math.random() * 900000)}`;
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
 
+    const normalized = this.normalizePhoneNumber(phoneNumber);
+
     const otp = this.otpCodesRepository.create({
-      phoneNumber,
+      phoneNumber: normalized,
       code,
       purpose,
       expiresAt,
@@ -362,9 +364,12 @@ export class AuthService {
     code: string;
     purpose?: string;
   }) {
+    const normalized = this.normalizePhoneNumber(payload.phoneNumber);
+    const phoneAliases = this.getPhoneAliases(normalized);
+
     const otp = await this.otpCodesRepository.findOne({
       where: {
-        phoneNumber: payload.phoneNumber,
+        phoneNumber: In(phoneAliases),
         purpose: payload.purpose ?? 'LOGIN',
       },
       order: {
@@ -382,6 +387,48 @@ export class AuthService {
 
     otp.consumedAt = new Date();
     await this.otpCodesRepository.save(otp);
+  }
+
+  private normalizePhoneNumber(phone?: string): string {
+    if (!phone) return '';
+    const digits = phone.replace(/\D/g, '');
+    const country = '265';
+
+    if (digits.startsWith('0')) {
+      const local = digits.replace(/^0+/, '');
+      return country + local;
+    }
+
+    if (digits.startsWith(country)) return digits;
+
+    if (digits.length === 9) return country + digits;
+
+    return digits;
+  }
+
+  private getPhoneAliases(phone?: string): string[] {
+    const normalized = this.normalizePhoneNumber(phone);
+    if (!normalized) return [];
+
+    const aliases = new Set<string>([normalized]);
+
+    if (normalized.startsWith('265')) {
+      aliases.add(`+${normalized}`);
+      aliases.add(`0${normalized.slice(3)}`);
+    }
+
+    return Array.from(aliases);
+  }
+
+  private async findUserByPhoneNumber(phone?: string): Promise<User | null> {
+    const aliases = this.getPhoneAliases(phone);
+    if (aliases.length === 0) return null;
+
+    return this.usersRepository.findOne({
+      where: {
+        phoneNumber: In(aliases),
+      },
+    });
   }
 }
 
