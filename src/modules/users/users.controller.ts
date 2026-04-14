@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Patch, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Patch, Post, UseGuards } from '@nestjs/common';
 import { CurrentUser } from '../../shared/decorators/current-user.decorator';
 import { JwtUser } from '../../shared/interfaces/jwt-user.interface';
 import { JwtAuthGuard } from '../../shared/guards/jwt-auth.guard';
@@ -15,12 +15,37 @@ export class UsersController {
     return this.usersService.findById(user.sub);
   }
 
+  @Get('me/saved')
+  getMySaved(@CurrentUser() user: JwtUser) {
+    return this.usersService.getSavedItems(user.sub);
+  }
+
+  @Get('me/bookings')
+  getMyBookings(@CurrentUser() user: JwtUser) {
+    return this.usersService.getBookings(user.sub);
+  }
+
+  @Get('me/history')
+  getMyHistory(@CurrentUser() user: JwtUser) {
+    return this.usersService.getHistory(user.sub);
+  }
+
+  @Get('me/wallet')
+  getMyWallet(@CurrentUser() user: JwtUser) {
+    return this.usersService.getWalletSummary(user.sub);
+  }
+
   @Patch('me')
   updateMe(
     @CurrentUser() user: JwtUser,
     @Body() payload: UpdateProfileDto,
   ) {
     return this.usersService.updateProfile(user.sub, payload);
+  }
+
+  @Post('me/upgrade-business')
+  upgradeMeToBusiness(@CurrentUser() user: JwtUser) {
+    return this.usersService.upgradeToBusiness(user.sub);
   }
 }
 
