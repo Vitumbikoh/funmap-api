@@ -13,6 +13,7 @@ import { Role } from '../../shared/enums/role.enum';
 import { JwtUser } from '../../shared/interfaces/jwt-user.interface';
 import { User } from '../users/entities/user.entity';
 import { CredentialLoginDto } from './dto/credential-login.dto';
+import { RegisterAdminDto } from './dto/register-admin.dto';
 import { RegisterRequestOtpDto } from './dto/register-request-otp.dto';
 import { RequestOtpDto } from './dto/request-otp.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
@@ -34,6 +35,82 @@ export class AuthService {
   ) {}
 
   async requestRegistrationOtp(payload: RegisterRequestOtpDto) {
+    return this.requestRegistrationOtpByRoles(payload, [Role.CLIENT]);
+  }
+
+  async requestBusinessRegistrationOtp(payload: RegisterRequestOtpDto) {
+    return this.requestRegistrationOtpByRoles(payload, [
+      Role.BUSINESS,
+      Role.CAPITAL_USER,
+    ]);
+  }
+
+  async verifyBusinessRegistrationOtp(payload: VerifyRegistrationOtpDto) {
+    return this.verifyRegistrationOtp(payload);
+  }
+
+  async registerAdmin(payload: RegisterAdminDto) {
+    const configuredSecret = this.configService.adminRegistrationSecret;
+
+    if (!configuredSecret) {
+      throw new BadRequestException(
+        'Admin registration is disabled. Configure ADMIN_REGISTRATION_SECRET.',
+      );
+    }
+
+    if (payload.adminSecret !== configuredSecret) {
+      throw new UnauthorizedException('Invalid admin registration secret.');
+    }
+
+    const normalizedPhoneNumber = payload.phoneNumber.trim();
+    const normalizedUsername = payload.username.trim().toLowerCase();
+
+    const existingByPhone = await this.usersRepository.findOne({
+      where: { phoneNumber: normalizedPhoneNumber },
+    });
+
+    if (existingByPhone) {
+      throw new ConflictException('Phone number is already registered.');
+    }
+
+    const existingByUsername = await this.usersRepository.findOne({
+      where: { username: normalizedUsername },
+    });
+
+    if (existingByUsername) {
+      throw new ConflictException('Username is already taken.');
+    }
+
+    const passwordHash = await bcrypt.hash(payload.password, 10);
+
+    const user = this.usersRepository.create({
+      phoneNumber: normalizedPhoneNumber,
+      displayName: payload.displayName.trim(),
+      username: normalizedUsername,
+      passwordHash,
+      roles: [Role.ADMIN],
+      isVerified: true,
+      lastActiveAt: new Date(),
+    });
+
+    const savedUser = await this.usersRepository.save(user);
+
+    return {
+      message: 'Admin account created',
+      user: {
+        id: savedUser.id,
+        phoneNumber: savedUser.phoneNumber,
+        displayName: savedUser.displayName,
+        username: savedUser.username,
+        roles: savedUser.roles,
+      },
+    };
+  }
+
+  private async requestRegistrationOtpByRoles(
+    payload: RegisterRequestOtpDto,
+    roles: Role[],
+  ) {
     const normalizedPhoneNumber = payload.phoneNumber.trim();
     const normalizedUsername = payload.username?.trim().toLowerCase();
 
@@ -66,7 +143,7 @@ export class AuthService {
       displayName: payload.displayName.trim(),
       username: normalizedUsername,
       passwordHash,
-      roles: [Role.CLIENT],
+      roles,
       isVerified: false,
       lastActiveAt: new Date(),
     });

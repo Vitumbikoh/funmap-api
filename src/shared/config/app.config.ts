@@ -51,6 +51,9 @@ export const appConfig = () => {
     clientEmail: process.env.FCM_CLIENT_EMAIL ?? '',
     privateKey: process.env.FCM_PRIVATE_KEY ?? '',
   },
+  admin: {
+    registrationSecret: process.env.ADMIN_REGISTRATION_SECRET ?? '',
+  },
   };
 };
 

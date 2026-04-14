@@ -68,5 +68,9 @@ export class AppConfigService {
       privateKey: this.configService.get<string>('fcm.privateKey', ''),
     };
   }
+
+  get adminRegistrationSecret(): string {
+    return this.configService.get<string>('admin.registrationSecret', '');
+  }
 }
 
