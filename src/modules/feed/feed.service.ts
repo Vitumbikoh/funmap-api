@@ -44,6 +44,9 @@ export class FeedService {
             p.caption AS title,
             p.media_ids AS "mediaIds",
             p.created_at AS "createdAt",
+            p.like_count AS "likeCount",
+            p.comment_count AS "commentCount",
+            p.share_count AS "shareCount",
             COALESCE(post_promo.boost_multiplier, 1) AS "boostMultiplier",
             (
               (p.like_count * 1) +
@@ -83,6 +86,9 @@ export class FeedService {
             r.caption AS title,
             ARRAY[r.media_id] AS "mediaIds",
             r.created_at AS "createdAt",
+            r.like_count AS "likeCount",
+            r.comment_count AS "commentCount",
+            r.share_count AS "shareCount",
             (
               (r.like_count * 1) +
               (r.comment_count * 2) +
@@ -112,14 +118,35 @@ export class FeedService {
             e.title,
             e.media_ids AS "mediaIds",
             e.created_at AS "createdAt",
+            COALESCE(event_like_count.value, 0) AS "likeCount",
+            COALESCE(event_comment_count.value, 0) AS "commentCount",
+            COALESCE(event_share_count.value, 0) AS "shareCount",
             COALESCE(event_promo.boost_multiplier, 1) AS "boostMultiplier",
             (
+              (COALESCE(event_like_count.value, 0) * 1) +
+              (COALESCE(event_comment_count.value, 0) * 2) +
+              (COALESCE(event_share_count.value, 0) * 3) +
               (e.rsvp_count * 4) +
               (e.payment_count * 5) +
               (e.view_count * 0.1) +
               GREATEST(0, 48 - EXTRACT(EPOCH FROM (e.start_date - NOW())) / 3600)
             ) * COALESCE(event_promo.boost_multiplier, 1) AS score
           FROM events e
+          LEFT JOIN LATERAL (
+            SELECT COUNT(*)::int AS value
+            FROM likes l
+            WHERE l.target_type = 'EVENT' AND l.target_id = e.id
+          ) event_like_count ON TRUE
+          LEFT JOIN LATERAL (
+            SELECT COUNT(*)::int AS value
+            FROM comments c
+            WHERE c.target_type = 'EVENT' AND c.target_id = e.id
+          ) event_comment_count ON TRUE
+          LEFT JOIN LATERAL (
+            SELECT COUNT(*)::int AS value
+            FROM shares s
+            WHERE s.target_type = 'EVENT' AND s.target_id = e.id
+          ) event_share_count ON TRUE
           LEFT JOIN LATERAL (
             SELECT promo.boost_multiplier
             FROM promotions promo
@@ -202,6 +229,9 @@ export class FeedService {
             p.media_ids AS "mediaIds",
             p.created_at AS "createdAt",
             p.author_id AS "authorId",
+            p.like_count AS "likeCount",
+            p.comment_count AS "commentCount",
+            p.share_count AS "shareCount",
             (
               (p.like_count * 1) +
               (p.comment_count * 2) +
@@ -228,6 +258,9 @@ export class FeedService {
             ARRAY[r.media_id] AS "mediaIds",
             r.created_at AS "createdAt",
             r.author_id AS "authorId",
+            r.like_count AS "likeCount",
+            r.comment_count AS "commentCount",
+            r.share_count AS "shareCount",
             (
               (r.like_count * 1) +
               (r.comment_count * 2) +
@@ -256,13 +289,34 @@ export class FeedService {
             e.media_ids AS "mediaIds",
             e.created_at AS "createdAt",
             e.organizer_id AS "authorId",
+            COALESCE(event_like_count.value, 0) AS "likeCount",
+            COALESCE(event_comment_count.value, 0) AS "commentCount",
+            COALESCE(event_share_count.value, 0) AS "shareCount",
             (
+              (COALESCE(event_like_count.value, 0) * 1) +
+              (COALESCE(event_comment_count.value, 0) * 2) +
+              (COALESCE(event_share_count.value, 0) * 3) +
               (e.rsvp_count * 4) +
               (e.payment_count * 5) +
               (e.view_count * 0.1) +
               GREATEST(0, 48 - EXTRACT(EPOCH FROM (e.start_date - NOW())) / 3600)
             ) AS score
           FROM events e
+          LEFT JOIN LATERAL (
+            SELECT COUNT(*)::int AS value
+            FROM likes l
+            WHERE l.target_type = 'EVENT' AND l.target_id = e.id
+          ) event_like_count ON TRUE
+          LEFT JOIN LATERAL (
+            SELECT COUNT(*)::int AS value
+            FROM comments c
+            WHERE c.target_type = 'EVENT' AND c.target_id = e.id
+          ) event_comment_count ON TRUE
+          LEFT JOIN LATERAL (
+            SELECT COUNT(*)::int AS value
+            FROM shares s
+            WHERE s.target_type = 'EVENT' AND s.target_id = e.id
+          ) event_share_count ON TRUE
           WHERE e.organizer_id = ANY($1)
             AND e.is_published = true
             AND e.end_date >= NOW()

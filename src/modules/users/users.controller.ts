@@ -1,5 +1,6 @@
 import { Body, Controller, Get, Patch, Post, UseGuards } from '@nestjs/common';
 import { CurrentUser } from '../../shared/decorators/current-user.decorator';
+import { GeoQueryDto } from '../../shared/dto/geo-query.dto';
 import { JwtUser } from '../../shared/interfaces/jwt-user.interface';
 import { JwtAuthGuard } from '../../shared/guards/jwt-auth.guard';
 import { UpdateProfileDto } from './dto/update-profile.dto';
@@ -13,6 +14,11 @@ export class UsersController {
   @Get('me')
   getMe(@CurrentUser() user: JwtUser) {
     return this.usersService.findById(user.sub);
+  }
+
+  @Get('nearby')
+  getNearbyUsers(@CurrentUser() user: JwtUser, query: GeoQueryDto) {
+    return this.usersService.findNearbyUsers(user.sub, query);
   }
 
   @Get('me/saved')

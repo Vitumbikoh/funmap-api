@@ -2,16 +2,25 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Rsvp } from '../events/entities/rsvp.entity';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { User } from '../users/entities/user.entity';
 import { ChatController } from './chat.controller';
 import { ChatGateway } from './chat.gateway';
 import { ChatService } from './chat.service';
+import { ChatRequest } from './entities/chat-request.entity';
 import { ChatParticipant } from './entities/chat-participant.entity';
 import { ChatRoom } from './entities/chat-room.entity';
 import { Message } from './entities/message.entity';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([ChatRoom, ChatParticipant, Message, Rsvp]),
+    TypeOrmModule.forFeature([
+      ChatRoom,
+      ChatParticipant,
+      ChatRequest,
+      Message,
+      Rsvp,
+      User,
+    ]),
     NotificationsModule,
   ],
   controllers: [ChatController],

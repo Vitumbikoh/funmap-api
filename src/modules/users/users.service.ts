@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Point } from 'geojson';
 import { Repository } from 'typeorm';
 import { Like } from '../../shared/database/entities/like.entity';
+import { GeoQueryDto } from '../../shared/dto/geo-query.dto';
 import { ContentTarget } from '../../shared/enums/content-target.enum';
 import { PaymentStatus } from '../../shared/enums/payment-status.enum';
 import { Role } from '../../shared/enums/role.enum';
@@ -42,6 +43,42 @@ export class UsersService {
     }
 
     return user;
+  }
+
+  async findNearbyUsers(userId: string, query: GeoQueryDto) {
+    const radiusKm = query.radiusKm ?? 15;
+
+    return this.usersRepository.query(
+      `
+        SELECT
+          u.id,
+          u.display_name AS "displayName",
+          u.username,
+          u.avatar_url AS "avatarUrl",
+          u.township,
+          u.district,
+          u.region,
+          u.country,
+          u.last_active_at AS "lastActiveAt",
+          ST_Y(u.home_location::geometry) AS latitude,
+          ST_X(u.home_location::geometry) AS longitude,
+          ST_Distance(
+            u.home_location,
+            ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography
+          ) / 1000 AS distance_km
+        FROM users u
+        WHERE u.id <> $4
+          AND u.home_location IS NOT NULL
+          AND ST_DWithin(
+            u.home_location,
+            ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography,
+            $3 * 1000
+          )
+        ORDER BY distance_km ASC
+        LIMIT 200
+      `,
+      [query.longitude, query.latitude, radiusKm, userId],
+    );
   }
 
   async updateProfile(userId: string, payload: UpdateProfileDto): Promise<User> {

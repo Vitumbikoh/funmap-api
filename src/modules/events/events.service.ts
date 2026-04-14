@@ -7,6 +7,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Point } from 'geojson';
 import { Repository } from 'typeorm';
 import { GeoQueryDto } from '../../shared/dto/geo-query.dto';
+import { Role } from '../../shared/enums/role.enum';
 import { RsvpStatus } from '../../shared/enums/rsvp-status.enum';
 import { JwtUser } from '../../shared/interfaces/jwt-user.interface';
 import { CreateEventDto } from './dto/create-event.dto';
@@ -24,6 +25,14 @@ export class EventsService {
   ) {}
 
   async create(user: JwtUser, payload: CreateEventDto) {
+    const canCreateEvent =
+      user.roles.includes(Role.BUSINESS) ||
+      user.roles.includes(Role.CAPITAL_USER);
+
+    if (!canCreateEvent) {
+      throw new ForbiddenException('Only business accounts can add events.');
+    }
+
     const event = this.eventsRepository.create({
       organizerId: user.sub,
       title: payload.title,
@@ -67,6 +76,8 @@ export class EventsService {
       `
         SELECT
           e.*,
+          u.display_name AS "organizerDisplayName",
+          u.avatar_url AS "organizerAvatarUrl",
           ST_Y(e.location::geometry) AS latitude,
           ST_X(e.location::geometry) AS longitude,
           ST_Distance(
@@ -74,6 +85,7 @@ export class EventsService {
             ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography
           ) / 1000 AS distance_km
         FROM events e
+        LEFT JOIN users u ON u.id = e.organizer_id
         WHERE e.is_published = true
           AND ST_DWithin(
             e.location,

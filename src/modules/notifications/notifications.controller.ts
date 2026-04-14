@@ -18,6 +18,14 @@ export class NotificationsController {
     return this.notificationsService.listForUser(user, query);
   }
 
+  @Get('activity-summary')
+  activitySummary(
+    @CurrentUser() user: JwtUser,
+    @Query() query: PaginationQueryDto,
+  ) {
+    return this.notificationsService.listActivitySummary(user, query);
+  }
+
   @Patch('read')
   markRead(
     @CurrentUser() user: JwtUser,

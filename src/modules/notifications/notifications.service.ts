@@ -5,6 +5,7 @@ import { PaginationQueryDto } from '../../shared/dto/pagination-query.dto';
 import { NotificationType } from '../../shared/enums/notification-type.enum';
 import { JwtUser } from '../../shared/interfaces/jwt-user.interface';
 import { FcmService } from '../../shared/services/fcm.service';
+import { User } from '../users/entities/user.entity';
 import { MarkNotificationsReadDto } from './dto/mark-notifications-read.dto';
 import { RegisterDeviceDto } from './dto/register-device.dto';
 import { UnregisterDeviceDto } from './dto/unregister-device.dto';
@@ -18,6 +19,8 @@ export class NotificationsService {
     private readonly notificationsRepository: Repository<Notification>,
     @InjectRepository(NotificationDevice)
     private readonly devicesRepository: Repository<NotificationDevice>,
+    @InjectRepository(User)
+    private readonly usersRepository: Repository<User>,
     private readonly fcmService: FcmService,
   ) {}
 
@@ -49,6 +52,87 @@ export class NotificationsService {
       limit,
       total,
       unreadCount,
+    };
+  }
+
+  async listActivitySummary(user: JwtUser, query: PaginationQueryDto) {
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 50;
+
+    const [items, unreadCount] = await Promise.all([
+      this.notificationsRepository.find({
+        where: { recipientUserId: user.sub },
+        order: { createdAt: 'DESC' },
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+      this.notificationsRepository.count({
+        where: {
+          recipientUserId: user.sub,
+          isRead: false,
+        },
+      }),
+    ]);
+
+    const actorIds = new Set<string>();
+    for (const item of items) {
+      const actorId = item.payload?.['actorUserId']?.toString();
+      if (actorId) actorIds.add(actorId);
+    }
+
+    const actors = actorIds.size
+      ? await this.usersRepository.find({
+          where: { id: In(Array.from(actorIds)) },
+          select: {
+            id: true,
+            displayName: true,
+            username: true,
+            avatarUrl: true,
+          },
+        })
+      : [];
+
+    const actorMap = new Map(
+      actors.map((a) => [
+        a.id,
+        {
+          id: a.id,
+          displayName: a.displayName ?? a.username ?? 'User',
+          username: a.username,
+          avatarUrl: a.avatarUrl,
+        },
+      ]),
+    );
+
+    const mapped = items.map((item) => {
+      const payload = item.payload ?? {};
+      const actorId = payload['actorUserId']?.toString();
+      const actor = actorId ? actorMap.get(actorId) : null;
+
+      return {
+        id: item.id,
+        type: item.type,
+        title: item.title,
+        body: item.body,
+        createdAt: item.createdAt,
+        isRead: item.isRead,
+        actor,
+        action: payload['action']?.toString(),
+        targetType: payload['targetType']?.toString(),
+        targetId: payload['targetId']?.toString(),
+      };
+    });
+
+    return {
+      page,
+      limit,
+      unreadCount,
+      social: mapped
+        .filter((n) => n.type?.toString().toUpperCase() === 'SOCIAL'),
+      bookings: mapped
+        .filter((n) => n.type?.toString().toUpperCase() === 'EVENT'),
+      payments: mapped
+        .filter((n) => n.type?.toString().toUpperCase() === 'PAYMENT'),
     };
   }
 

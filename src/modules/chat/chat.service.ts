@@ -1,4 +1,6 @@
 import {
+  BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -11,8 +13,10 @@ import { RsvpStatus } from '../../shared/enums/rsvp-status.enum';
 import { JwtUser } from '../../shared/interfaces/jwt-user.interface';
 import { Rsvp } from '../events/entities/rsvp.entity';
 import { NotificationsService } from '../notifications/notifications.service';
+import { User } from '../users/entities/user.entity';
 import { CreatePrivateRoomDto } from './dto/create-private-room.dto';
 import { SendMessageDto } from './dto/send-message.dto';
+import { ChatRequest, ChatRequestStatus } from './entities/chat-request.entity';
 import { ChatParticipant } from './entities/chat-participant.entity';
 import { ChatRoom } from './entities/chat-room.entity';
 import { Message } from './entities/message.entity';
@@ -25,33 +29,207 @@ export class ChatService {
     private readonly roomsRepository: Repository<ChatRoom>,
     @InjectRepository(ChatParticipant)
     private readonly participantsRepository: Repository<ChatParticipant>,
+    @InjectRepository(ChatRequest)
+    private readonly requestsRepository: Repository<ChatRequest>,
     @InjectRepository(Message)
     private readonly messagesRepository: Repository<Message>,
     @InjectRepository(Rsvp)
     private readonly rsvpRepository: Repository<Rsvp>,
+    @InjectRepository(User)
+    private readonly usersRepository: Repository<User>,
     private readonly chatGateway: ChatGateway,
     private readonly notificationsService: NotificationsService,
   ) {}
 
-  async createPrivateRoom(user: JwtUser, payload: CreatePrivateRoomDto) {
-    const room = this.roomsRepository.create({
-      type: ChatRoomType.PRIVATE,
-      createdByUserId: user.sub,
+  async requestPrivateChat(user: JwtUser, otherUserId: string) {
+    if (otherUserId === user.sub) {
+      throw new BadRequestException('Cannot send a chat request to yourself');
+    }
+
+    const recipient = await this.usersRepository.findOne({
+      where: { id: otherUserId },
+      select: { id: true },
     });
-    const savedRoom = await this.roomsRepository.save(room);
 
-    await this.participantsRepository.save([
-      this.participantsRepository.create({
-        roomId: savedRoom.id,
-        userId: user.sub,
-      }),
-      this.participantsRepository.create({
-        roomId: savedRoom.id,
-        userId: payload.otherUserId,
-      }),
-    ]);
+    if (!recipient) {
+      throw new NotFoundException('Recipient user not found');
+    }
 
-    return savedRoom;
+    const existingRoom = await this.findExistingPrivateRoom(user.sub, otherUserId);
+    if (existingRoom) {
+      return {
+        status: 'accepted',
+        requestId: null,
+        roomId: existingRoom.id,
+      };
+    }
+
+    const pending = await this.requestsRepository.findOne({
+      where: [
+        {
+          requesterId: user.sub,
+          recipientId: otherUserId,
+          status: ChatRequestStatus.PENDING,
+        },
+        {
+          requesterId: otherUserId,
+          recipientId: user.sub,
+          status: ChatRequestStatus.PENDING,
+        },
+      ],
+    });
+
+    if (pending) {
+      throw new ConflictException('A pending chat request already exists');
+    }
+
+    const created = await this.requestsRepository.save(
+      this.requestsRepository.create({
+        requesterId: user.sub,
+        recipientId: otherUserId,
+        status: ChatRequestStatus.PENDING,
+      }),
+    );
+
+    await this.notificationsService.createNotification(
+      otherUserId,
+      NotificationType.SOCIAL,
+      'New chat request',
+      'You received a new chat request.',
+      {
+        requestId: created.id,
+        requesterId: user.sub,
+      },
+    );
+
+    return {
+      status: 'pending',
+      requestId: created.id,
+      roomId: null,
+    };
+  }
+
+  async listIncomingRequests(user: JwtUser) {
+    const requests = await this.requestsRepository.find({
+      where: {
+        recipientId: user.sub,
+        status: ChatRequestStatus.PENDING,
+      },
+      order: { createdAt: 'DESC' },
+      take: 100,
+    });
+
+    if (!requests.length) {
+      return [];
+    }
+
+    const requesterIds = Array.from(new Set(requests.map((item) => item.requesterId)));
+    const requesters = await this.usersRepository.find({
+      where: requesterIds.map((id) => ({ id })),
+    });
+    const requesterMap = new Map(requesters.map((u) => [u.id, u]));
+
+    return requests.map((item) => {
+      const requester = requesterMap.get(item.requesterId);
+      return {
+        id: item.id,
+        createdAt: item.createdAt,
+        requesterId: item.requesterId,
+        requesterName: requester?.displayName ?? requester?.username ?? 'FunMap user',
+        requesterUsername: requester?.username ?? null,
+        requesterAvatarUrl: requester?.avatarUrl ?? null,
+      };
+    });
+  }
+
+  async listOutgoingRequests(user: JwtUser) {
+    const requests = await this.requestsRepository.find({
+      where: {
+        requesterId: user.sub,
+        status: ChatRequestStatus.PENDING,
+      },
+      order: { createdAt: 'DESC' },
+      take: 100,
+    });
+
+    if (!requests.length) {
+      return [];
+    }
+
+    const recipientIds = Array.from(new Set(requests.map((item) => item.recipientId)));
+    const recipients = await this.usersRepository.find({
+      where: recipientIds.map((id) => ({ id })),
+    });
+    const recipientMap = new Map(recipients.map((u) => [u.id, u]));
+
+    return requests.map((item) => {
+      const recipient = recipientMap.get(item.recipientId);
+      return {
+        id: item.id,
+        createdAt: item.createdAt,
+        recipientId: item.recipientId,
+        recipientName: recipient?.displayName ?? recipient?.username ?? 'FunMap user',
+        recipientUsername: recipient?.username ?? null,
+        recipientAvatarUrl: recipient?.avatarUrl ?? null,
+      };
+    });
+  }
+
+  async respondToChatRequest(
+    user: JwtUser,
+    requestId: string,
+    action: 'accept' | 'decline',
+  ) {
+    const request = await this.requestsRepository.findOne({
+      where: { id: requestId },
+    });
+
+    if (!request || request.recipientId !== user.sub) {
+      throw new NotFoundException('Chat request not found');
+    }
+
+    if (request.status !== ChatRequestStatus.PENDING) {
+      throw new ConflictException('Chat request has already been handled');
+    }
+
+    request.respondedAt = new Date();
+
+    if (action === 'decline') {
+      request.status = ChatRequestStatus.DECLINED;
+      await this.requestsRepository.save(request);
+
+      return {
+        status: 'declined',
+        requestId: request.id,
+        roomId: null,
+      };
+    }
+
+    const room = await this.findOrCreatePrivateRoom(user.sub, request.requesterId);
+    request.status = ChatRequestStatus.ACCEPTED;
+    request.roomId = room.id;
+    await this.requestsRepository.save(request);
+
+    await this.notificationsService.createNotification(
+      request.requesterId,
+      NotificationType.CHAT,
+      'Chat request accepted',
+      'Your chat request was accepted.',
+      {
+        roomId: room.id,
+        requestId: request.id,
+      },
+    );
+
+    return {
+      status: 'accepted',
+      requestId: request.id,
+      roomId: room.id,
+    };
+  }
+
+  async createPrivateRoom(user: JwtUser, payload: CreatePrivateRoomDto) {
+    return this.findOrCreatePrivateRoom(user.sub, payload.otherUserId);
   }
 
   async joinEventRoom(user: JwtUser, eventId: string) {
@@ -107,7 +285,17 @@ export class ChatService {
     return this.roomsRepository.query(
       `
         SELECT
-          cr.*,
+          cr.id,
+          cr.type,
+          cr.event_id AS "eventId",
+          cr.created_by_user_id AS "createdByUserId",
+          cr.created_at AS "createdAt",
+          cr.updated_at AS "updatedAt",
+          cr.last_message_at AS "lastMessageAt",
+          CASE
+            WHEN cr.type = 'PRIVATE' THEN COALESCE(other_user.display_name, other_user.username, 'Private Chat')
+            ELSE COALESCE(cr.title, 'Chat Room')
+          END AS title,
           cp.last_read_at AS "lastReadAt",
           COALESCE(
             COUNT(m.id) FILTER (
@@ -118,9 +306,28 @@ export class ChatService {
           )::int AS "unreadCount"
         FROM chat_rooms cr
         INNER JOIN chat_participants cp ON cp.room_id = cr.id
+        LEFT JOIN LATERAL (
+          SELECT u.display_name, u.username
+          FROM chat_participants cp_other
+          INNER JOIN users u ON u.id = cp_other.user_id
+          WHERE cp_other.room_id = cr.id
+            AND cp_other.user_id <> $1
+          LIMIT 1
+        ) other_user ON TRUE
         LEFT JOIN messages m ON m.room_id = cr.id
         WHERE cp.user_id = $1
-        GROUP BY cr.id, cp.last_read_at
+        GROUP BY
+          cr.id,
+          cr.type,
+          cr.event_id,
+          cr.created_by_user_id,
+          cr.created_at,
+          cr.updated_at,
+          cr.last_message_at,
+          cr.title,
+          cp.last_read_at,
+          other_user.display_name,
+          other_user.username
         ORDER BY cr.last_message_at DESC NULLS LAST, cr.created_at DESC
       `,
       [user.sub],
@@ -287,6 +494,50 @@ export class ChatService {
     }
 
     return participant;
+  }
+
+  private async findExistingPrivateRoom(firstUserId: string, secondUserId: string) {
+    return this.roomsRepository
+      .createQueryBuilder('room')
+      .innerJoin(ChatParticipant, 'p1', 'p1.room_id = room.id AND p1.user_id = :firstUserId', {
+        firstUserId,
+      })
+      .innerJoin(ChatParticipant, 'p2', 'p2.room_id = room.id AND p2.user_id = :secondUserId', {
+        secondUserId,
+      })
+      .where('room.type = :type', { type: ChatRoomType.PRIVATE })
+      .orderBy('room.created_at', 'DESC')
+      .getOne();
+  }
+
+  private async findOrCreatePrivateRoom(currentUserId: string, otherUserId: string) {
+    if (currentUserId === otherUserId) {
+      throw new BadRequestException('Cannot create private room with yourself');
+    }
+
+    const existingRoom = await this.findExistingPrivateRoom(currentUserId, otherUserId);
+    if (existingRoom) {
+      return existingRoom;
+    }
+
+    const room = this.roomsRepository.create({
+      type: ChatRoomType.PRIVATE,
+      createdByUserId: currentUserId,
+    });
+    const savedRoom = await this.roomsRepository.save(room);
+
+    await this.participantsRepository.save([
+      this.participantsRepository.create({
+        roomId: savedRoom.id,
+        userId: currentUserId,
+      }),
+      this.participantsRepository.create({
+        roomId: savedRoom.id,
+        userId: otherUserId,
+      }),
+    ]);
+
+    return savedRoom;
   }
 }
 
