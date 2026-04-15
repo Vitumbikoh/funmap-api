@@ -142,9 +142,9 @@ export class AnalyticsService {
             FROM likes l
             WHERE l.created_at >= $5
               AND (
-                (l.target_type = $2 AND EXISTS (SELECT 1 FROM posts p WHERE p.id = l.target_id AND p.author_id = $1))
-                OR (l.target_type = $3 AND EXISTS (SELECT 1 FROM reels r WHERE r.id = l.target_id AND r.author_id = $1))
-                OR (l.target_type = $4 AND EXISTS (SELECT 1 FROM events e WHERE e.id = l.target_id AND e.organizer_id = $1))
+                (l.target_type::text = $2 AND EXISTS (SELECT 1 FROM posts p WHERE p.id = l.target_id AND p.author_id = $1))
+                OR (l.target_type::text = $3 AND EXISTS (SELECT 1 FROM reels r WHERE r.id = l.target_id AND r.author_id = $1))
+                OR (l.target_type::text = $4 AND EXISTS (SELECT 1 FROM events e WHERE e.id = l.target_id AND e.organizer_id = $1))
               )
           )::int AS likes,
           (
@@ -152,9 +152,9 @@ export class AnalyticsService {
             FROM comments c
             WHERE c.created_at >= $5
               AND (
-                (c.target_type = $2 AND EXISTS (SELECT 1 FROM posts p WHERE p.id = c.target_id AND p.author_id = $1))
-                OR (c.target_type = $3 AND EXISTS (SELECT 1 FROM reels r WHERE r.id = c.target_id AND r.author_id = $1))
-                OR (c.target_type = $4 AND EXISTS (SELECT 1 FROM events e WHERE e.id = c.target_id AND e.organizer_id = $1))
+                (c.target_type::text = $2 AND EXISTS (SELECT 1 FROM posts p WHERE p.id = c.target_id AND p.author_id = $1))
+                OR (c.target_type::text = $3 AND EXISTS (SELECT 1 FROM reels r WHERE r.id = c.target_id AND r.author_id = $1))
+                OR (c.target_type::text = $4 AND EXISTS (SELECT 1 FROM events e WHERE e.id = c.target_id AND e.organizer_id = $1))
               )
           )::int AS comments,
           (
@@ -162,9 +162,9 @@ export class AnalyticsService {
             FROM shares s
             WHERE s.created_at >= $5
               AND (
-                (s.target_type = $2 AND EXISTS (SELECT 1 FROM posts p WHERE p.id = s.target_id AND p.author_id = $1))
-                OR (s.target_type = $3 AND EXISTS (SELECT 1 FROM reels r WHERE r.id = s.target_id AND r.author_id = $1))
-                OR (s.target_type = $4 AND EXISTS (SELECT 1 FROM events e WHERE e.id = s.target_id AND e.organizer_id = $1))
+                (s.target_type::text = $2 AND EXISTS (SELECT 1 FROM posts p WHERE p.id = s.target_id AND p.author_id = $1))
+                OR (s.target_type::text = $3 AND EXISTS (SELECT 1 FROM reels r WHERE r.id = s.target_id AND r.author_id = $1))
+                OR (s.target_type::text = $4 AND EXISTS (SELECT 1 FROM events e WHERE e.id = s.target_id AND e.organizer_id = $1))
               )
           )::int AS shares,
           (
@@ -172,9 +172,9 @@ export class AnalyticsService {
             FROM views v
             WHERE v.created_at >= $5
               AND (
-                (v.target_type = $2 AND EXISTS (SELECT 1 FROM posts p WHERE p.id = v.target_id AND p.author_id = $1))
-                OR (v.target_type = $3 AND EXISTS (SELECT 1 FROM reels r WHERE r.id = v.target_id AND r.author_id = $1))
-                OR (v.target_type = $4 AND EXISTS (SELECT 1 FROM events e WHERE e.id = v.target_id AND e.organizer_id = $1))
+                (v.target_type::text = $2 AND EXISTS (SELECT 1 FROM posts p WHERE p.id = v.target_id AND p.author_id = $1))
+                OR (v.target_type::text = $3 AND EXISTS (SELECT 1 FROM reels r WHERE r.id = v.target_id AND r.author_id = $1))
+                OR (v.target_type::text = $4 AND EXISTS (SELECT 1 FROM events e WHERE e.id = v.target_id AND e.organizer_id = $1))
               )
           )::int AS views
       `,
@@ -378,9 +378,9 @@ export class AnalyticsService {
           FROM views v
           WHERE v.created_at >= $2
             AND (
-              (v.target_type = $3 AND EXISTS (SELECT 1 FROM posts p WHERE p.id = v.target_id AND p.author_id = $1))
-              OR (v.target_type = $4 AND EXISTS (SELECT 1 FROM reels r WHERE r.id = v.target_id AND r.author_id = $1))
-              OR (v.target_type = $5 AND EXISTS (SELECT 1 FROM events e WHERE e.id = v.target_id AND e.organizer_id = $1))
+              (v.target_type::text = $3 AND EXISTS (SELECT 1 FROM posts p WHERE p.id = v.target_id AND p.author_id = $1))
+              OR (v.target_type::text = $4 AND EXISTS (SELECT 1 FROM reels r WHERE r.id = v.target_id AND r.author_id = $1))
+              OR (v.target_type::text = $5 AND EXISTS (SELECT 1 FROM events e WHERE e.id = v.target_id AND e.organizer_id = $1))
             )
         `,
         [

@@ -88,6 +88,9 @@ export class EventsService {
           e.*,
           u.display_name AS "organizerDisplayName",
           u.avatar_url AS "organizerAvatarUrl",
+          COALESCE(event_like_count.value, 0) AS "likeCount",
+          COALESCE(event_comment_count.value, 0) AS "commentCount",
+          COALESCE(event_share_count.value, 0) AS "shareCount",
           ST_Y(e.location::geometry) AS latitude,
           ST_X(e.location::geometry) AS longitude,
           ST_Distance(
@@ -96,6 +99,21 @@ export class EventsService {
           ) / 1000 AS distance_km
         FROM events e
         LEFT JOIN users u ON u.id = e.organizer_id
+        LEFT JOIN LATERAL (
+          SELECT COUNT(*)::int AS value
+          FROM likes l
+          WHERE l.target_type::text = 'EVENT' AND l.target_id = e.id
+        ) event_like_count ON TRUE
+        LEFT JOIN LATERAL (
+          SELECT COUNT(*)::int AS value
+          FROM comments c
+          WHERE c.target_type::text = 'EVENT' AND c.target_id = e.id
+        ) event_comment_count ON TRUE
+        LEFT JOIN LATERAL (
+          SELECT COUNT(*)::int AS value
+          FROM shares s
+          WHERE s.target_type::text = 'EVENT' AND s.target_id = e.id
+        ) event_share_count ON TRUE
         WHERE e.is_published = true
           AND ST_DWithin(
             e.location,

@@ -110,11 +110,15 @@ export class EngagementController {
 
   private parseTargetType(targetType: string): ContentTarget {
     const upperType = targetType.toUpperCase();
+    const normalizedType =
+      upperType === 'PHOTO' || upperType === 'IMAGE'
+        ? ContentTarget.POST
+        : upperType;
 
-    if (!Object.values(ContentTarget).includes(upperType as ContentTarget)) {
+    if (!Object.values(ContentTarget).includes(normalizedType as ContentTarget)) {
       throw new BadRequestException('Invalid target type');
     }
 
-    return upperType as ContentTarget;
+    return normalizedType as ContentTarget;
   }
 }
