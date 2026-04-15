@@ -6,6 +6,7 @@ import { Share } from '../../shared/database/entities/share.entity';
 import { View } from '../../shared/database/entities/view.entity';
 import { EventsModule } from '../events/events.module';
 import { Event } from '../events/entities/event.entity';
+import { Rsvp } from '../events/entities/rsvp.entity';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { Post } from '../posts/entities/post.entity';
 import { Reel } from '../reels/entities/reel.entity';
@@ -14,7 +15,7 @@ import { EngagementService } from './engagement.service';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Like, Comment, Share, Post, Reel, Event]),
+    TypeOrmModule.forFeature([Like, Comment, Share, Post, Reel, Event, Rsvp]),
     TypeOrmModule.forFeature([View]),
     NotificationsModule,
     EventsModule,

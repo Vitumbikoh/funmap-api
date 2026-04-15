@@ -1,4 +1,5 @@
 import {
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -11,8 +12,10 @@ import { View } from '../../shared/database/entities/view.entity';
 import { PaginationQueryDto } from '../../shared/dto/pagination-query.dto';
 import { ContentTarget } from '../../shared/enums/content-target.enum';
 import { NotificationType } from '../../shared/enums/notification-type.enum';
+import { RsvpStatus } from '../../shared/enums/rsvp-status.enum';
 import { JwtUser } from '../../shared/interfaces/jwt-user.interface';
 import { Event } from '../events/entities/event.entity';
+import { Rsvp } from '../events/entities/rsvp.entity';
 import { NotificationsService } from '../notifications/notifications.service';
 import { Post } from '../posts/entities/post.entity';
 import { Reel } from '../reels/entities/reel.entity';
@@ -42,6 +45,8 @@ export class EngagementService {
     private readonly reelsRepository: Repository<Reel>,
     @InjectRepository(Event)
     private readonly eventsRepository: Repository<Event>,
+    @InjectRepository(Rsvp)
+    private readonly rsvpRepository: Repository<Rsvp>,
     private readonly notificationsService: NotificationsService,
   ) {}
 
@@ -130,6 +135,24 @@ export class EngagementService {
     payload: AddCommentDto,
   ) {
     const targetMeta = await this.resolveTargetMeta(targetType, targetId);
+
+    if (targetType === ContentTarget.EVENT) {
+      const rsvp = await this.rsvpRepository.findOne({
+        where: {
+          eventId: targetId,
+          userId: user.sub,
+        },
+      });
+
+      const isUnlocked =
+        rsvp?.status === RsvpStatus.CONFIRMED || Boolean(rsvp?.paidAt);
+
+      if (!isUnlocked) {
+        throw new ForbiddenException(
+          'Comments unlock after RSVP or payment confirmation.',
+        );
+      }
+    }
 
     const comment = this.commentsRepository.create({
       userId: user.sub,
