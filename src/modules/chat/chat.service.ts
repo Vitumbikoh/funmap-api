@@ -337,11 +337,27 @@ export class ChatService {
   async listMessages(user: JwtUser, roomId: string) {
     await this.ensureParticipant(user.sub, roomId);
 
-    return this.messagesRepository.find({
-      where: { roomId },
-      order: { createdAt: 'ASC' },
-      take: 100,
-    });
+    return this.messagesRepository.query(
+      `
+        SELECT
+          m.id,
+          m.room_id AS "roomId",
+          m.sender_id AS "senderId",
+          m.body,
+          m.media_url AS "mediaUrl",
+          m.metadata,
+          m.created_at AS "createdAt",
+          m.updated_at AS "updatedAt",
+          COALESCE(u.display_name, u.username, 'FunMap user') AS "senderName",
+          u.avatar_url AS "senderAvatarUrl"
+        FROM messages m
+        INNER JOIN users u ON u.id = m.sender_id
+        WHERE m.room_id = $1
+        ORDER BY m.created_at ASC
+        LIMIT 100
+      `,
+      [roomId],
+    );
   }
 
   async sendMessage(user: JwtUser, roomId: string, payload: SendMessageDto) {
@@ -364,6 +380,23 @@ export class ChatService {
     });
 
     const savedMessage = await this.messagesRepository.save(message);
+
+    const sender = await this.usersRepository.findOne({
+      where: { id: user.sub },
+      select: {
+        id: true,
+        displayName: true,
+        username: true,
+        avatarUrl: true,
+      },
+    });
+
+    const enrichedMessage = {
+      ...savedMessage,
+      senderName:
+        sender?.displayName ?? sender?.username ?? 'FunMap user',
+      senderAvatarUrl: sender?.avatarUrl ?? null,
+    };
 
     await this.roomsRepository.update(
       { id: roomId },
@@ -407,9 +440,12 @@ export class ChatService {
       ),
     );
 
-    this.chatGateway.emitMessage(roomId, savedMessage as unknown as Record<string, unknown>);
+    this.chatGateway.emitMessage(
+      roomId,
+      enrichedMessage as unknown as Record<string, unknown>,
+    );
 
-    return savedMessage;
+    return enrichedMessage;
   }
 
   async markRoomAsRead(user: JwtUser, roomId: string) {
