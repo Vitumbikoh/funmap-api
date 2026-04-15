@@ -1,13 +1,19 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Point } from 'geojson';
-import { Repository } from 'typeorm';
+import { Not, Repository } from 'typeorm';
 import { Like } from '../../shared/database/entities/like.entity';
 import { GeoQueryDto } from '../../shared/dto/geo-query.dto';
+import { BusinessVerificationStatus } from '../../shared/enums/business-verification-status.enum';
 import { ContentTarget } from '../../shared/enums/content-target.enum';
 import { PaymentStatus } from '../../shared/enums/payment-status.enum';
 import { Role } from '../../shared/enums/role.enum';
 import { RsvpStatus } from '../../shared/enums/rsvp-status.enum';
+import { SubscriptionPlan } from '../../shared/enums/subscription-plan.enum';
 import { Event } from '../events/entities/event.entity';
 import { Rsvp } from '../events/entities/rsvp.entity';
 import { Payment } from '../payments/entities/payment.entity';
@@ -43,6 +49,11 @@ export class UsersService {
     }
 
     return user;
+  }
+
+  async getPublicProfile(id: string) {
+    const user = await this.findById(id);
+    return this.sanitizeUser(user);
   }
 
   async findNearbyUsers(userId: string, query: GeoQueryDto) {
@@ -81,8 +92,49 @@ export class UsersService {
     );
   }
 
-  async updateProfile(userId: string, payload: UpdateProfileDto): Promise<User> {
+  async updateProfile(userId: string, payload: UpdateProfileDto) {
     const user = await this.findById(userId);
+    const nextUsername = normalizeHandle(payload.username);
+    const nextEmail = normalizeEmail(payload.email);
+    const nextDisplayName = normalizeText(payload.displayName);
+    const nextBusinessName = normalizeText(payload.businessName);
+    const nextBusinessDescription = normalizeText(payload.businessDescription);
+    const nextAvatarUrl = normalizeText(payload.avatarUrl);
+    const nextBusinessCoverUrl = normalizeText(payload.businessCoverUrl);
+    const nextVerificationDocumentUrl = normalizeText(
+      payload.verificationDocumentUrl,
+    );
+    const nextBio = normalizeText(payload.bio);
+    const nextTownship = normalizeText(payload.township);
+    const nextDistrict = normalizeText(payload.district);
+    const nextRegion = normalizeText(payload.region);
+    const nextCountry = normalizeText(payload.country);
+
+    if (nextUsername && nextUsername !== user.username) {
+      const existingByUsername = await this.usersRepository.findOne({
+        where: {
+          username: nextUsername,
+          id: Not(userId),
+        },
+      });
+
+      if (existingByUsername) {
+        throw new ConflictException('Username is already taken.');
+      }
+    }
+
+    if (nextEmail && nextEmail !== user.email) {
+      const existingByEmail = await this.usersRepository.findOne({
+        where: {
+          email: nextEmail,
+          id: Not(userId),
+        },
+      });
+
+      if (existingByEmail) {
+        throw new ConflictException('Email is already registered.');
+      }
+    }
 
     const homeLocation =
       payload.latitude !== undefined && payload.longitude !== undefined
@@ -93,20 +145,59 @@ export class UsersService {
         : user.homeLocation;
 
     Object.assign(user, {
-      username: payload.username ?? user.username,
-      displayName: payload.displayName ?? user.displayName,
-      avatarUrl: payload.avatarUrl ?? user.avatarUrl,
-      bio: payload.bio ?? user.bio,
-      township: payload.township ?? user.township,
-      district: payload.district ?? user.district,
-      region: payload.region ?? user.region,
-      country: payload.country ?? user.country,
-      interests: payload.interests ?? user.interests,
+      username: nextUsername !== undefined ? nextUsername : user.username,
+      email: nextEmail !== undefined ? nextEmail : user.email,
+      displayName:
+        nextDisplayName !== undefined ? nextDisplayName : user.displayName,
+      businessName:
+        nextBusinessName !== undefined ? nextBusinessName : user.businessName,
+      businessCategory: payload.businessCategory ?? user.businessCategory,
+      businessDescription:
+        nextBusinessDescription !== undefined
+          ? nextBusinessDescription
+          : user.businessDescription,
+      operatingCoverage: payload.operatingCoverage ?? user.operatingCoverage,
+      avatarUrl: nextAvatarUrl !== undefined ? nextAvatarUrl : user.avatarUrl,
+      businessCoverUrl:
+        nextBusinessCoverUrl !== undefined
+          ? nextBusinessCoverUrl
+          : user.businessCoverUrl,
+      verificationDocumentUrl:
+        nextVerificationDocumentUrl !== undefined
+          ? nextVerificationDocumentUrl
+          : user.verificationDocumentUrl,
+      subscriptionPlan: payload.subscriptionPlan ?? user.subscriptionPlan,
+      bio: nextBio !== undefined ? nextBio : user.bio,
+      township: nextTownship !== undefined ? nextTownship : user.township,
+      district: nextDistrict !== undefined ? nextDistrict : user.district,
+      region: nextRegion !== undefined ? nextRegion : user.region,
+      country: nextCountry !== undefined ? nextCountry : user.country,
+      interests:
+        payload.interests
+          ?.map((item) => item.trim())
+          .filter((item) => item.length > 0) ??
+        user.interests,
       homeLocation,
       lastActiveAt: new Date(),
     });
 
-    return this.usersRepository.save(user);
+    if (nextBusinessName != null && nextBusinessName.length > 0) {
+      user.displayName = nextBusinessName;
+    }
+
+    if (payload.acceptCapitalRules == true) {
+      user.capitalRulesAcceptedAt = new Date();
+    }
+
+    if (
+      nextVerificationDocumentUrl !== undefined &&
+      user.businessVerificationStatus !== BusinessVerificationStatus.VERIFIED
+    ) {
+      user.businessVerificationStatus = BusinessVerificationStatus.PENDING;
+    }
+
+    const savedUser = await this.usersRepository.save(user);
+    return this.sanitizeUser(savedUser);
   }
 
   async upgradeToBusiness(userId: string) {
@@ -117,13 +208,17 @@ export class UsersService {
     nextRoles.add(Role.CAPITAL_USER);
 
     user.roles = Array.from(nextRoles);
+    user.subscriptionPlan = user.subscriptionPlan ?? SubscriptionPlan.LITE;
+    if (user.businessVerificationStatus !== BusinessVerificationStatus.VERIFIED) {
+      user.businessVerificationStatus = BusinessVerificationStatus.PENDING;
+    }
     user.lastActiveAt = new Date();
 
     const savedUser = await this.usersRepository.save(user);
 
     return {
       message: 'Account upgraded to business.',
-      user: savedUser,
+      user: this.sanitizeUser(savedUser),
     };
   }
 
@@ -367,5 +462,32 @@ export class UsersService {
       },
     };
   }
+
+  private sanitizeUser(user: User) {
+    const { passwordHash, ...safeUser } = user;
+    return safeUser;
+  }
 }
 
+function normalizeText(value?: string | null) {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (value === null) {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function normalizeHandle(value?: string | null) {
+  const normalized = normalizeText(value);
+  return normalized == null ? normalized : normalized.toLowerCase();
+}
+
+function normalizeEmail(value?: string | null) {
+  const normalized = normalizeText(value);
+  return normalized == null ? normalized : normalized.toLowerCase();
+}

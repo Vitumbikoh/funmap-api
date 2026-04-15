@@ -9,7 +9,9 @@ import { InjectRepository } from '@nestjs/typeorm';
 import * as bcrypt from 'bcrypt';
 import { In, Repository } from 'typeorm';
 import { AppConfigService } from '../../shared/config/app-config.service';
+import { BusinessVerificationStatus } from '../../shared/enums/business-verification-status.enum';
 import { Role } from '../../shared/enums/role.enum';
+import { SubscriptionPlan } from '../../shared/enums/subscription-plan.enum';
 import { JwtUser } from '../../shared/interfaces/jwt-user.interface';
 import { User } from '../users/entities/user.entity';
 import { CredentialLoginDto } from './dto/credential-login.dto';
@@ -111,6 +113,12 @@ export class AuthService {
   ) {
     const normalizedPhoneNumber = this.normalizePhoneNumber(payload.phoneNumber);
     const normalizedUsername = payload.username?.trim().toLowerCase();
+    const normalizedEmail = payload.email?.trim().toLowerCase();
+    const isBusinessRegistration =
+      roles.includes(Role.BUSINESS) || roles.includes(Role.CAPITAL_USER);
+    const displayName = isBusinessRegistration
+      ? (payload.businessName?.trim() || payload.displayName.trim())
+      : payload.displayName.trim();
 
     const existingByPhone = await this.findUserByPhoneNumber(normalizedPhoneNumber);
 
@@ -131,16 +139,39 @@ export class AuthService {
       }
     }
 
+    if (normalizedEmail) {
+      const existingByEmail = await this.usersRepository.findOne({
+        where: { email: normalizedEmail },
+      });
+
+      if (
+        existingByEmail &&
+        existingByEmail.phoneNumber !== normalizedPhoneNumber
+      ) {
+        throw new ConflictException('Email is already registered.');
+      }
+    }
+
     const passwordHash = await bcrypt.hash(payload.password, 10);
 
     const user = this.usersRepository.create({
       ...(existingByPhone ?? {}),
       phoneNumber: normalizedPhoneNumber,
-      displayName: payload.displayName.trim(),
+      email: normalizedEmail ?? existingByPhone?.email,
+      displayName: displayName,
       username: normalizedUsername,
+      businessName: isBusinessRegistration
+        ? displayName
+        : existingByPhone?.businessName,
       passwordHash,
       roles,
       isVerified: false,
+      businessVerificationStatus: isBusinessRegistration
+        ? BusinessVerificationStatus.PENDING
+        : existingByPhone?.businessVerificationStatus,
+      subscriptionPlan: isBusinessRegistration
+        ? SubscriptionPlan.LITE
+        : existingByPhone?.subscriptionPlan,
       lastActiveAt: new Date(),
     });
 
@@ -332,7 +363,7 @@ export class AuthService {
     await this.sessionsRepository.save(savedSession);
 
     return {
-      user,
+      user: this.sanitizeUser(user),
       accessToken,
       refreshToken,
     };
@@ -430,5 +461,9 @@ export class AuthService {
       },
     });
   }
-}
 
+  private sanitizeUser(user: User) {
+    const { passwordHash, ...safeUser } = user;
+    return safeUser;
+  }
+}

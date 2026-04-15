@@ -1,5 +1,12 @@
 import { Transform } from 'class-transformer';
-import { IsOptional, IsString, Matches, MaxLength, MinLength } from 'class-validator';
+import {
+  IsEmail,
+  IsOptional,
+  IsString,
+  Matches,
+  MaxLength,
+  MinLength,
+} from 'class-validator';
 
 export class RegisterRequestOtpDto {
   @Transform(({ value }) =>
@@ -13,6 +20,16 @@ export class RegisterRequestOtpDto {
   @IsString()
   @MaxLength(100)
   displayName!: string;
+
+  @IsOptional()
+  @IsEmail()
+  @MaxLength(160)
+  email?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(140)
+  businessName?: string;
 
   @IsOptional()
   @IsString()

@@ -9,11 +9,13 @@ import {
   IsLongitude,
   IsOptional,
   IsString,
+  IsUrl,
   IsUUID,
   MaxLength,
   Min,
 } from 'class-validator';
 import { EventCategory } from '../../../shared/enums/event-category.enum';
+import { EventLifecycleStatus } from '../../../shared/enums/event-lifecycle-status.enum';
 
 export class UpdateEventDto {
   @IsOptional()
@@ -49,6 +51,12 @@ export class UpdateEventDto {
   moodTag?: string;
 
   @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(12)
+  @IsString({ each: true })
+  hashtags?: string[];
+
+  @IsOptional()
   @Type(() => Number)
   @Min(0)
   ticketPrice?: number;
@@ -61,6 +69,14 @@ export class UpdateEventDto {
   @IsOptional()
   @IsBoolean()
   paymentRequired?: boolean;
+
+  @IsOptional()
+  @IsUrl()
+  paymentLink?: string;
+
+  @IsOptional()
+  @IsEnum(EventLifecycleStatus)
+  status?: EventLifecycleStatus;
 
   @IsOptional()
   @Type(() => Number)

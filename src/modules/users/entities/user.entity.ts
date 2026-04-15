@@ -5,7 +5,11 @@ import {
 } from 'typeorm';
 import { Point } from 'geojson';
 import { BaseEntity } from '../../../shared/database/base.entity';
+import { BusinessCategory } from '../../../shared/enums/business-category.enum';
+import { BusinessCoverage } from '../../../shared/enums/business-coverage.enum';
+import { BusinessVerificationStatus } from '../../../shared/enums/business-verification-status.enum';
 import { Role } from '../../../shared/enums/role.enum';
+import { SubscriptionPlan } from '../../../shared/enums/subscription-plan.enum';
 
 @Entity({ name: 'users' })
 export class User extends BaseEntity {
@@ -16,6 +20,10 @@ export class User extends BaseEntity {
   @Column({ name: 'password_hash', type: 'varchar', length: 100, nullable: true })
   passwordHash?: string | null;
 
+  @Column({ type: 'varchar', length: 160, unique: true, nullable: true })
+  @Index({ unique: true })
+  email?: string | null;
+
   @Column({ type: 'varchar', length: 60, unique: true, nullable: true })
   @Index({ unique: true })
   username?: string | null;
@@ -25,6 +33,50 @@ export class User extends BaseEntity {
 
   @Column({ name: 'avatar_url', type: 'text', nullable: true })
   avatarUrl?: string | null;
+
+  @Column({ name: 'business_name', type: 'varchar', length: 140, nullable: true })
+  businessName?: string | null;
+
+  @Column({
+    name: 'business_category',
+    type: 'enum',
+    enum: BusinessCategory,
+    nullable: true,
+  })
+  businessCategory?: BusinessCategory | null;
+
+  @Column({ name: 'business_description', type: 'text', nullable: true })
+  businessDescription?: string | null;
+
+  @Column({
+    name: 'operating_coverage',
+    type: 'enum',
+    enum: BusinessCoverage,
+    nullable: true,
+  })
+  operatingCoverage?: BusinessCoverage | null;
+
+  @Column({ name: 'business_cover_url', type: 'text', nullable: true })
+  businessCoverUrl?: string | null;
+
+  @Column({ name: 'verification_document_url', type: 'text', nullable: true })
+  verificationDocumentUrl?: string | null;
+
+  @Column({
+    name: 'business_verification_status',
+    type: 'enum',
+    enum: BusinessVerificationStatus,
+    default: BusinessVerificationStatus.PENDING,
+  })
+  businessVerificationStatus: BusinessVerificationStatus;
+
+  @Column({
+    name: 'subscription_plan',
+    type: 'enum',
+    enum: SubscriptionPlan,
+    default: SubscriptionPlan.LITE,
+  })
+  subscriptionPlan: SubscriptionPlan;
 
   @Column({ type: 'text', nullable: true })
   bio?: string | null;
@@ -64,7 +116,9 @@ export class User extends BaseEntity {
   @Column({ name: 'interests', type: 'text', array: true, default: [] })
   interests: string[];
 
+  @Column({ name: 'capital_rules_accepted_at', type: 'timestamptz', nullable: true })
+  capitalRulesAcceptedAt?: Date | null;
+
   @Column({ name: 'last_active_at', type: 'timestamptz', nullable: true })
   lastActiveAt?: Date | null;
 }
-

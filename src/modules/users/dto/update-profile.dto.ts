@@ -1,6 +1,9 @@
 import { Type } from 'class-transformer';
 import {
   IsArray,
+  IsBoolean,
+  IsEmail,
+  IsEnum,
   IsLatitude,
   IsLongitude,
   IsOptional,
@@ -8,6 +11,9 @@ import {
   IsUrl,
   MaxLength,
 } from 'class-validator';
+import { BusinessCategory } from '../../../shared/enums/business-category.enum';
+import { BusinessCoverage } from '../../../shared/enums/business-coverage.enum';
+import { SubscriptionPlan } from '../../../shared/enums/subscription-plan.enum';
 
 export class UpdateProfileDto {
   @IsOptional()
@@ -16,13 +22,48 @@ export class UpdateProfileDto {
   username?: string;
 
   @IsOptional()
+  @IsEmail()
+  @MaxLength(160)
+  email?: string;
+
+  @IsOptional()
   @IsString()
   @MaxLength(100)
   displayName?: string;
 
   @IsOptional()
+  @IsString()
+  @MaxLength(140)
+  businessName?: string;
+
+  @IsOptional()
+  @IsEnum(BusinessCategory)
+  businessCategory?: BusinessCategory;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(1200)
+  businessDescription?: string;
+
+  @IsOptional()
+  @IsEnum(BusinessCoverage)
+  operatingCoverage?: BusinessCoverage;
+
+  @IsOptional()
   @IsUrl()
   avatarUrl?: string;
+
+  @IsOptional()
+  @IsUrl()
+  businessCoverUrl?: string;
+
+  @IsOptional()
+  @IsUrl()
+  verificationDocumentUrl?: string;
+
+  @IsOptional()
+  @IsEnum(SubscriptionPlan)
+  subscriptionPlan?: SubscriptionPlan;
 
   @IsOptional()
   @IsString()
@@ -51,6 +92,10 @@ export class UpdateProfileDto {
   interests?: string[];
 
   @IsOptional()
+  @IsBoolean()
+  acceptCapitalRules?: boolean;
+
+  @IsOptional()
   @Type(() => Number)
   @IsLatitude()
   latitude?: number;
@@ -60,4 +105,3 @@ export class UpdateProfileDto {
   @IsLongitude()
   longitude?: number;
 }
-

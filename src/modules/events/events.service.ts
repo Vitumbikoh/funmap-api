@@ -7,6 +7,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Point } from 'geojson';
 import { Repository } from 'typeorm';
 import { GeoQueryDto } from '../../shared/dto/geo-query.dto';
+import { EventLifecycleStatus } from '../../shared/enums/event-lifecycle-status.enum';
 import { Role } from '../../shared/enums/role.enum';
 import { RsvpStatus } from '../../shared/enums/rsvp-status.enum';
 import { JwtUser } from '../../shared/interfaces/jwt-user.interface';
@@ -14,6 +15,9 @@ import { CreateEventDto } from './dto/create-event.dto';
 import { UpdateEventDto } from './dto/update-event.dto';
 import { Event } from './entities/event.entity';
 import { Rsvp } from './entities/rsvp.entity';
+
+type EventListItem = Record<string, unknown>;
+type AttendeeItem = Record<string, unknown>;
 
 @Injectable()
 export class EventsService {
@@ -33,18 +37,24 @@ export class EventsService {
       throw new ForbiddenException('Only business accounts can add events.');
     }
 
+    const startDate = new Date(payload.startDate);
+    const endDate = new Date(payload.endDate);
+
     const event = this.eventsRepository.create({
       organizerId: user.sub,
       title: payload.title,
       description: payload.description,
       mediaIds: payload.mediaIds,
-      startDate: new Date(payload.startDate),
-      endDate: new Date(payload.endDate),
+      startDate,
+      endDate,
       category: payload.category,
       moodTag: payload.moodTag,
+      hashtags: this.normalizeTags(payload.hashtags),
       ticketPrice: payload.ticketPrice.toFixed(2),
       capacity: payload.capacity,
       paymentRequired: payload.paymentRequired,
+      paymentLink: payload.paymentLink,
+      status: payload.status ?? this.deriveStatus(startDate, endDate),
       location: {
         type: 'Point',
         coordinates: [payload.longitude, payload.latitude],
@@ -100,6 +110,110 @@ export class EventsService {
     );
   }
 
+  async findMine(user: JwtUser) {
+    const items = (await this.eventsRepository.query(
+      `
+        SELECT
+          e.*,
+          ST_Y(e.location::geometry) AS latitude,
+          ST_X(e.location::geometry) AS longitude,
+          EXISTS (
+            SELECT 1
+            FROM promotions promo
+            WHERE promo.target_type = 'EVENT'
+              AND promo.target_id = e.id
+              AND promo.status = 'ACTIVE'
+          ) AS "isBoosted"
+        FROM events e
+        WHERE e.organizer_id = $1
+        ORDER BY e.start_date DESC, e.created_at DESC
+      `,
+      [user.sub],
+    )) as EventListItem[];
+
+    return {
+      items,
+      summary: {
+        total: items.length,
+        upcoming: items.filter(
+          (item) => item.status === EventLifecycleStatus.UPCOMING,
+        ).length,
+        live: items.filter(
+          (item) => item.status === EventLifecycleStatus.LIVE,
+        ).length,
+        completed: items.filter(
+          (item) => item.status === EventLifecycleStatus.COMPLETED,
+        ).length,
+        cancelled: items.filter(
+          (item) => item.status === EventLifecycleStatus.CANCELLED,
+        ).length,
+        views: items.reduce(
+          (sum, item) => sum + toInt(item.view_count ?? item.viewCount),
+          0,
+        ),
+        rsvps: items.reduce(
+          (sum, item) => sum + toInt(item.rsvp_count ?? item.rsvpCount),
+          0,
+        ),
+        paidAttendees: items.reduce(
+          (sum, item) => sum + toInt(item.payment_count ?? item.paymentCount),
+          0,
+        ),
+      },
+    };
+  }
+
+  async findAttendees(user: JwtUser, eventId: string) {
+    await this.getOwnedEvent(user.sub, eventId);
+
+    const items = (await this.rsvpRepository.query(
+      `
+        SELECT
+          r.id,
+          r.status,
+          r.payment_required AS "paymentRequired",
+          r.created_at AS "bookedAt",
+          r.paid_at AS "paidAt",
+          u.id AS "userId",
+          u.display_name AS "displayName",
+          u.username,
+          u.avatar_url AS "avatarUrl",
+          u.phone_number AS "phoneNumber",
+          p.status AS "paymentStatus",
+          p.amount,
+          p.currency,
+          p.created_at AS "paymentCreatedAt"
+        FROM rsvps r
+        INNER JOIN users u ON u.id = r.user_id
+        LEFT JOIN LATERAL (
+          SELECT payment.status, payment.amount, payment.currency, payment.created_at
+          FROM payments payment
+          WHERE payment.event_id = r.event_id
+            AND payment.user_id = r.user_id
+          ORDER BY payment.created_at DESC
+          LIMIT 1
+        ) p ON true
+        WHERE r.event_id = $1
+        ORDER BY r.created_at DESC
+      `,
+      [eventId],
+    )) as AttendeeItem[];
+
+    return {
+      items,
+      totals: {
+        total: items.length,
+        confirmed: items.filter(
+          (item) => item.status === RsvpStatus.CONFIRMED,
+        ).length,
+        pending: items.filter(
+          (item) => item.status === RsvpStatus.PENDING,
+        ).length,
+        paid: items.filter((item) => item.paidAt != null).length,
+      },
+    };
+  }
+
   async rsvp(user: JwtUser, eventId: string) {
     const event = await this.findOne(eventId);
 
@@ -115,7 +229,9 @@ export class EventsService {
         eventId,
         userId: user.sub,
         paymentRequired: event.paymentRequired,
-        status: event.paymentRequired ? RsvpStatus.PENDING : RsvpStatus.CONFIRMED,
+        status: event.paymentRequired
+          ? RsvpStatus.PENDING
+          : RsvpStatus.CONFIRMED,
       });
     }
 
@@ -166,6 +282,10 @@ export class EventsService {
       event.moodTag = payload.moodTag;
     }
 
+    if (payload.hashtags !== undefined) {
+      event.hashtags = this.normalizeTags(payload.hashtags);
+    }
+
     if (payload.ticketPrice !== undefined) {
       event.ticketPrice = payload.ticketPrice.toFixed(2);
     }
@@ -176,6 +296,10 @@ export class EventsService {
 
     if (payload.paymentRequired !== undefined) {
       event.paymentRequired = payload.paymentRequired;
+    }
+
+    if (payload.paymentLink !== undefined) {
+      event.paymentLink = payload.paymentLink;
     }
 
     if (payload.venueName !== undefined) {
@@ -205,12 +329,20 @@ export class EventsService {
       } as Point;
     }
 
+    if (payload.status !== undefined) {
+      event.status = payload.status;
+      event.isPublished = payload.status !== EventLifecycleStatus.CANCELLED;
+    } else {
+      event.status = this.deriveStatus(event.startDate, event.endDate);
+    }
+
     return this.eventsRepository.save(event);
   }
 
   async cancel(user: JwtUser, eventId: string) {
     const event = await this.getOwnedEvent(user.sub, eventId);
     event.isPublished = false;
+    event.status = EventLifecycleStatus.CANCELLED;
 
     if (event.endDate > new Date()) {
       event.endDate = new Date();
@@ -234,5 +366,36 @@ export class EventsService {
 
     return event;
   }
+
+  private deriveStatus(startDate: Date, endDate: Date) {
+    const now = new Date();
+    if (endDate.getTime() < now.getTime()) {
+      return EventLifecycleStatus.COMPLETED;
+    }
+    if (
+      startDate.getTime() <= now.getTime() &&
+      endDate.getTime() >= now.getTime()
+    ) {
+      return EventLifecycleStatus.LIVE;
+    }
+    return EventLifecycleStatus.UPCOMING;
+  }
+
+  private normalizeTags(tags?: string[]) {
+    return (tags ?? [])
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0);
+  }
 }
 
+function toInt(value: unknown) {
+  if (typeof value === 'number') {
+    return Math.trunc(value);
+  }
+
+  if (typeof value === 'string') {
+    return Number.parseInt(value, 10) || 0;
+  }
+
+  return 0;
+}

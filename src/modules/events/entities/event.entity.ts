@@ -2,6 +2,7 @@ import { Point } from 'geojson';
 import { Column, Entity, JoinColumn, ManyToOne } from 'typeorm';
 import { BaseEntity } from '../../../shared/database/base.entity';
 import { EventCategory } from '../../../shared/enums/event-category.enum';
+import { EventLifecycleStatus } from '../../../shared/enums/event-lifecycle-status.enum';
 import { User } from '../../users/entities/user.entity';
 
 @Entity({ name: 'events' })
@@ -34,6 +35,9 @@ export class Event extends BaseEntity {
   @Column({ name: 'mood_tag', type: 'varchar', length: 80, nullable: true })
   moodTag?: string | null;
 
+  @Column({ name: 'hashtags', type: 'text', array: true, default: [] })
+  hashtags: string[];
+
   @Column({ name: 'ticket_price', type: 'numeric', precision: 12, scale: 2, default: 0 })
   ticketPrice: string;
 
@@ -42,6 +46,16 @@ export class Event extends BaseEntity {
 
   @Column({ name: 'payment_required', type: 'boolean', default: false })
   paymentRequired: boolean;
+
+  @Column({ name: 'payment_link', type: 'text', nullable: true })
+  paymentLink?: string | null;
+
+  @Column({
+    type: 'enum',
+    enum: EventLifecycleStatus,
+    default: EventLifecycleStatus.UPCOMING,
+  })
+  status: EventLifecycleStatus;
 
   @Column({ name: 'is_published', type: 'boolean', default: true })
   isPublished: boolean;
@@ -77,4 +91,3 @@ export class Event extends BaseEntity {
   @Column({ name: 'payment_count', type: 'int', default: 0 })
   paymentCount: number;
 }
-

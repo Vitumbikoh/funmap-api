@@ -27,6 +27,21 @@ export class EventsController {
     return this.eventsService.findNearby(query);
   }
 
+  @Get('mine')
+  @UseGuards(JwtAuthGuard)
+  findMine(@CurrentUser() user: JwtUser) {
+    return this.eventsService.findMine(user);
+  }
+
+  @Get(':id/attendees')
+  @UseGuards(JwtAuthGuard)
+  findAttendees(
+    @CurrentUser() user: JwtUser,
+    @Param('id', new ParseUUIDPipe()) id: string,
+  ) {
+    return this.eventsService.findAttendees(user, id);
+  }
+
   @Get(':id')
   findOne(@Param('id', new ParseUUIDPipe()) id: string) {
     return this.eventsService.findOne(id);
@@ -63,4 +78,3 @@ export class EventsController {
     return this.eventsService.cancel(user, id);
   }
 }
-

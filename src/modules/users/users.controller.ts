@@ -13,7 +13,7 @@ export class UsersController {
 
   @Get('me')
   getMe(@CurrentUser() user: JwtUser) {
-    return this.usersService.findById(user.sub);
+    return this.usersService.getPublicProfile(user.sub);
   }
 
   @Get('nearby')
@@ -54,4 +54,3 @@ export class UsersController {
     return this.usersService.upgradeToBusiness(user.sub);
   }
 }
-
