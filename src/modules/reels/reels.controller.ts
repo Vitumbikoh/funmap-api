@@ -26,6 +26,12 @@ export class ReelsController {
     return this.reelsService.findForYou(user, query);
   }
 
+  @Get('mine')
+  @UseGuards(JwtAuthGuard)
+  findMine(@CurrentUser() user: JwtUser) {
+    return this.reelsService.findMine(user);
+  }
+
   @Post()
   @UseGuards(JwtAuthGuard)
   create(@CurrentUser() user: JwtUser, @Body() payload: CreateReelDto) {

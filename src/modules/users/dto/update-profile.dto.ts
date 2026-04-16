@@ -62,6 +62,15 @@ export class UpdateProfileDto {
   verificationDocumentUrl?: string;
 
   @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  nationalIdNumber?: string;
+
+  @IsOptional()
+  @IsUrl()
+  nationalIdDocumentUrl?: string;
+
+  @IsOptional()
   @IsEnum(SubscriptionPlan)
   subscriptionPlan?: SubscriptionPlan;
 

@@ -9,6 +9,7 @@ import { AccountStatus } from '../../../shared/enums/account-status.enum';
 import { BusinessCategory } from '../../../shared/enums/business-category.enum';
 import { BusinessCoverage } from '../../../shared/enums/business-coverage.enum';
 import { BusinessVerificationStatus } from '../../../shared/enums/business-verification-status.enum';
+import { NationalIdStatus } from '../../../shared/enums/national-id-status.enum';
 import { Role } from '../../../shared/enums/role.enum';
 import { SubscriptionPlan } from '../../../shared/enums/subscription-plan.enum';
 
@@ -133,4 +134,37 @@ export class User extends BaseEntity {
 
   @Column({ name: 'deactivated_until', type: 'timestamptz', nullable: true })
   deactivatedUntil?: Date | null;
+
+  @Column({ name: 'national_id_number', type: 'varchar', length: 40, nullable: true, unique: true })
+  @Index({ unique: true })
+  nationalIdNumber?: string | null;
+
+  @Column({ name: 'national_id_document_url', type: 'text', nullable: true })
+  nationalIdDocumentUrl?: string | null;
+
+  @Column({
+    name: 'national_id_status',
+    type: 'enum',
+    enum: NationalIdStatus,
+    default: NationalIdStatus.NOT_SUBMITTED,
+  })
+  nationalIdStatus: NationalIdStatus;
+
+  @Column({ name: 'fun_oclock_enabled', type: 'boolean', default: false })
+  funOclockEnabled: boolean;
+
+  @Column({ name: 'fun_oclock_days', type: 'text', array: true, default: ['FRI', 'SAT'] })
+  funOclockDays: string[];
+
+  @Column({ name: 'fun_oclock_start_hour', type: 'int', nullable: true })
+  funOclockStartHour?: number | null;
+
+  @Column({ name: 'fun_oclock_end_hour', type: 'int', nullable: true })
+  funOclockEndHour?: number | null;
+
+  @Column({ name: 'fun_oclock_radius_km', type: 'int', default: 5 })
+  funOclockRadiusKm: number;
+
+  @Column({ name: 'fun_oclock_timezone', type: 'varchar', length: 64, default: 'Africa/Blantyre' })
+  funOclockTimezone: string;
 }

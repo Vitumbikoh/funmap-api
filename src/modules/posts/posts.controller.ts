@@ -27,6 +27,12 @@ export class PostsController {
     return this.postsService.findNearby(query);
   }
 
+  @Get('mine')
+  @UseGuards(JwtAuthGuard)
+  findMine(@CurrentUser() user: JwtUser) {
+    return this.postsService.findMine(user);
+  }
+
   @HttpPost()
   @UseGuards(JwtAuthGuard)
   create(@CurrentUser() user: JwtUser, @Body() payload: CreatePostDto) {

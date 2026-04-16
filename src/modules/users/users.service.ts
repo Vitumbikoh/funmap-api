@@ -12,6 +12,7 @@ import { GeoQueryDto } from '../../shared/dto/geo-query.dto';
 import { AccountStatus } from '../../shared/enums/account-status.enum';
 import { BusinessVerificationStatus } from '../../shared/enums/business-verification-status.enum';
 import { ContentTarget } from '../../shared/enums/content-target.enum';
+import { NationalIdStatus } from '../../shared/enums/national-id-status.enum';
 import { PaymentStatus } from '../../shared/enums/payment-status.enum';
 import { Role } from '../../shared/enums/role.enum';
 import { RsvpStatus } from '../../shared/enums/rsvp-status.enum';
@@ -22,6 +23,8 @@ import { Rsvp } from '../events/entities/rsvp.entity';
 import { Payment } from '../payments/entities/payment.entity';
 import { Post } from '../posts/entities/post.entity';
 import { Reel } from '../reels/entities/reel.entity';
+import { UpdateFunOclockDto } from './dto/update-fun-oclock.dto';
+import { UpdateNationalIdStatusDto } from './dto/update-national-id-status.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { User } from './entities/user.entity';
 
@@ -111,6 +114,8 @@ export class UsersService {
       payload.verificationDocumentUrl,
     );
     const nextBio = normalizeText(payload.bio);
+    const nextNationalIdNumber = normalizeNationalId(payload.nationalIdNumber);
+    const nextNationalIdDocumentUrl = normalizeText(payload.nationalIdDocumentUrl);
     const nextTownship = normalizeText(payload.township);
     const nextDistrict = normalizeText(payload.district);
     const nextRegion = normalizeText(payload.region);
@@ -139,6 +144,22 @@ export class UsersService {
 
       if (existingByEmail) {
         throw new ConflictException('Email is already registered.');
+      }
+    }
+
+    if (
+      nextNationalIdNumber &&
+      nextNationalIdNumber !== user.nationalIdNumber
+    ) {
+      const existingByNationalId = await this.usersRepository.findOne({
+        where: {
+          nationalIdNumber: nextNationalIdNumber,
+          id: Not(userId),
+        },
+      });
+
+      if (existingByNationalId) {
+        throw new ConflictException('National ID is already registered.');
       }
     }
 
@@ -172,6 +193,14 @@ export class UsersService {
         nextVerificationDocumentUrl !== undefined
           ? nextVerificationDocumentUrl
           : user.verificationDocumentUrl,
+      nationalIdNumber:
+        nextNationalIdNumber !== undefined
+          ? nextNationalIdNumber
+          : user.nationalIdNumber,
+      nationalIdDocumentUrl:
+        nextNationalIdDocumentUrl !== undefined
+          ? nextNationalIdDocumentUrl
+          : user.nationalIdDocumentUrl,
       subscriptionPlan: payload.subscriptionPlan ?? user.subscriptionPlan,
       bio: nextBio !== undefined ? nextBio : user.bio,
       township: nextTownship !== undefined ? nextTownship : user.township,
@@ -200,6 +229,17 @@ export class UsersService {
       user.businessVerificationStatus !== BusinessVerificationStatus.VERIFIED
     ) {
       user.businessVerificationStatus = BusinessVerificationStatus.PENDING;
+    }
+
+    if (
+      (nextNationalIdNumber !== undefined ||
+        nextNationalIdDocumentUrl !== undefined) &&
+      user.nationalIdStatus !== NationalIdStatus.VERIFIED
+    ) {
+      user.nationalIdStatus =
+        user.nationalIdNumber != null && user.nationalIdNumber.trim().length > 0
+          ? NationalIdStatus.PENDING
+          : NationalIdStatus.NOT_SUBMITTED;
     }
 
     const savedUser = await this.usersRepository.save(user);
@@ -272,6 +312,9 @@ export class UsersService {
     user.region = null;
     user.country = null;
     user.isVerified = false;
+    user.nationalIdNumber = null;
+    user.nationalIdDocumentUrl = null;
+    user.nationalIdStatus = NationalIdStatus.NOT_SUBMITTED;
     user.lastActiveAt = new Date();
 
     await Promise.all([
@@ -282,6 +325,119 @@ export class UsersService {
     return {
       message:
         'Account deleted permanently. You can register again with your previous phone number.',
+    };
+  }
+
+  async getFunOclockPreferences(userId: string) {
+    const user = await this.findById(userId);
+
+    return {
+      enabled: user.funOclockEnabled,
+      days: user.funOclockDays ?? ['FRI', 'SAT'],
+      startHour: user.funOclockStartHour ?? 20,
+      endHour: user.funOclockEndHour ?? 23,
+      radiusKm: user.funOclockRadiusKm ?? 5,
+      timezone: user.funOclockTimezone ?? 'Africa/Blantyre',
+    };
+  }
+
+  async getPendingNationalIdReviews() {
+    const items = await this.usersRepository.find({
+      where: {
+        nationalIdStatus: NationalIdStatus.PENDING,
+      },
+      order: {
+        updatedAt: 'DESC',
+      },
+      select: {
+        id: true,
+        displayName: true,
+        username: true,
+        phoneNumber: true,
+        nationalIdNumber: true,
+        nationalIdDocumentUrl: true,
+        nationalIdStatus: true,
+        updatedAt: true,
+      },
+      take: 200,
+    });
+
+    return {
+      items,
+      total: items.length,
+    };
+  }
+
+  async updateNationalIdReviewStatus(
+    reviewerUserId: string,
+    targetUserId: string,
+    payload: UpdateNationalIdStatusDto,
+  ) {
+    const user = await this.findById(targetUserId);
+
+    if (!user.nationalIdNumber) {
+      throw new BadRequestException('User has not submitted National ID details.');
+    }
+
+    if (
+      payload.status !== NationalIdStatus.VERIFIED &&
+      payload.status !== NationalIdStatus.REJECTED &&
+      payload.status !== NationalIdStatus.PENDING
+    ) {
+      throw new BadRequestException(
+        'Review status must be PENDING, VERIFIED, or REJECTED.',
+      );
+    }
+
+    user.nationalIdStatus = payload.status;
+    user.lastActiveAt = new Date();
+    const saved = await this.usersRepository.save(user);
+
+    return {
+      message: `National ID review updated to ${saved.nationalIdStatus}.`,
+      reviewedBy: reviewerUserId,
+      note: payload.note?.trim() || null,
+      user: this.sanitizeUser(saved),
+    };
+  }
+
+  async updateFunOclockPreferences(userId: string, payload: UpdateFunOclockDto) {
+    const user = await this.findById(userId);
+
+    if (
+      payload.startHour !== undefined &&
+      payload.endHour !== undefined &&
+      payload.startHour === payload.endHour
+    ) {
+      throw new BadRequestException('Start and end hour cannot be the same.');
+    }
+
+    const days = payload.days?.map((item) => item.toUpperCase()) ?? user.funOclockDays;
+
+    if (days.length === 0) {
+      throw new BadRequestException('At least one day is required.');
+    }
+
+    user.funOclockEnabled = payload.enabled ?? user.funOclockEnabled;
+    user.funOclockDays = days;
+    user.funOclockStartHour = payload.startHour ?? user.funOclockStartHour ?? 20;
+    user.funOclockEndHour = payload.endHour ?? user.funOclockEndHour ?? 24;
+    user.funOclockRadiusKm = payload.radiusKm ?? user.funOclockRadiusKm ?? 5;
+    user.funOclockTimezone =
+      normalizeText(payload.timezone) ?? user.funOclockTimezone ?? 'Africa/Blantyre';
+
+    const saved = await this.usersRepository.save(user);
+
+    return {
+      message: 'Fun o\'clock preferences updated.',
+      preferences: {
+        enabled: saved.funOclockEnabled,
+        days: saved.funOclockDays,
+        startHour: saved.funOclockStartHour,
+        endHour: saved.funOclockEndHour,
+        radiusKm: saved.funOclockRadiusKm,
+        timezone: saved.funOclockTimezone,
+      },
     };
   }
 
@@ -563,4 +719,17 @@ function normalizeHandle(value?: string | null) {
 function normalizeEmail(value?: string | null) {
   const normalized = normalizeText(value);
   return normalized == null ? normalized : normalized.toLowerCase();
+}
+
+function normalizeNationalId(value?: string | null) {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (value === null) {
+    return null;
+  }
+
+  const normalized = value.trim().toUpperCase().replace(/\s+/g, '');
+  return normalized.length > 0 ? normalized : null;
 }

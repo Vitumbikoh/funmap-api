@@ -18,6 +18,10 @@ export class AppConfigService {
     return this.configService.get<string>('app.apiPrefix', 'api/v1');
   }
 
+  get funOclockDispatchIntervalMinutes(): number {
+    return this.configService.get<number>('app.funOclockDispatchIntervalMinutes', 0);
+  }
+
   get jwtAccessSecret(): string {
     return this.configService.get<string>('jwt.accessSecret', 'change-me-access');
   }

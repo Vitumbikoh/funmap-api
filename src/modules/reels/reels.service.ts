@@ -187,5 +187,18 @@ export class ReelsService {
       params,
     );
   }
+
+  async findMine(user: JwtUser) {
+    const items = await this.reelsRepository.find({
+      where: { authorId: user.sub },
+      order: { createdAt: 'DESC' },
+      take: 120,
+    });
+
+    return {
+      items,
+      total: items.length,
+    };
+  }
 }
 

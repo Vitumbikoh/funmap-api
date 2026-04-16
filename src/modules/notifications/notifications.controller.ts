@@ -1,7 +1,10 @@
-import { Body, Controller, Get, Patch, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import { Roles } from '../../shared/decorators/roles.decorator';
+import { Role } from '../../shared/enums/role.enum';
 import { CurrentUser } from '../../shared/decorators/current-user.decorator';
 import { PaginationQueryDto } from '../../shared/dto/pagination-query.dto';
 import { JwtAuthGuard } from '../../shared/guards/jwt-auth.guard';
+import { RolesGuard } from '../../shared/guards/roles.guard';
 import { JwtUser } from '../../shared/interfaces/jwt-user.interface';
 import { MarkNotificationsReadDto } from './dto/mark-notifications-read.dto';
 import { RegisterDeviceDto } from './dto/register-device.dto';
@@ -48,6 +51,18 @@ export class NotificationsController {
     @Body() payload: UnregisterDeviceDto,
   ) {
     return this.notificationsService.unregisterDevice(user, payload);
+  }
+
+  @Post('fun-oclock/test')
+  triggerMyFunOclockDigest(@CurrentUser() user: JwtUser) {
+    return this.notificationsService.dispatchFunOclockDigestToUser(user.sub);
+  }
+
+  @Post('fun-oclock/dispatch')
+  @UseGuards(RolesGuard)
+  @Roles(Role.ADMIN)
+  dispatchFunOclockDigest() {
+    return this.notificationsService.dispatchFunOclockDigestForAllUsers();
   }
 }
 

@@ -14,6 +14,9 @@ export const appConfig = () => {
     host: process.env.APP_HOST ?? '0.0.0.0',
     port: Number(process.env.APP_PORT ?? 4000),
     apiPrefix: process.env.API_PREFIX ?? 'api/v1',
+      funOclockDispatchIntervalMinutes: Number(
+        process.env.FUN_OCLOCK_DISPATCH_INTERVAL_MINUTES ?? 0,
+      ),
   },
   jwt: {
     accessSecret: process.env.JWT_ACCESS_SECRET ?? 'change-me-access',

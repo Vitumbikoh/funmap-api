@@ -67,6 +67,19 @@ export class PostsService {
     );
   }
 
+  async findMine(user: JwtUser) {
+    const items = await this.postsRepository.find({
+      where: { authorId: user.sub },
+      order: { createdAt: 'DESC' },
+      take: 120,
+    });
+
+    return {
+      items,
+      total: items.length,
+    };
+  }
+
   async update(user: JwtUser, postId: string, payload: UpdatePostDto) {
     const post = await this.getOwnedPost(user.sub, postId);
 

@@ -3,16 +3,23 @@ import {
   Controller,
   Delete,
   Get,
+  Param,
+  ParseUUIDPipe,
   Patch,
   Post,
   Query,
   UseGuards,
 } from '@nestjs/common';
+import { Roles } from '../../shared/decorators/roles.decorator';
 import { CurrentUser } from '../../shared/decorators/current-user.decorator';
 import { GeoQueryDto } from '../../shared/dto/geo-query.dto';
+import { Role } from '../../shared/enums/role.enum';
 import { JwtUser } from '../../shared/interfaces/jwt-user.interface';
 import { JwtAuthGuard } from '../../shared/guards/jwt-auth.guard';
+import { RolesGuard } from '../../shared/guards/roles.guard';
 import { DeactivateAccountDto } from './dto/deactivate-account.dto';
+import { UpdateFunOclockDto } from './dto/update-fun-oclock.dto';
+import { UpdateNationalIdStatusDto } from './dto/update-national-id-status.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { UsersService } from './users.service';
 
@@ -75,5 +82,36 @@ export class UsersController {
   @Delete('me/account')
   deleteMePermanently(@CurrentUser() user: JwtUser) {
     return this.usersService.deleteAccountPermanently(user.sub);
+  }
+
+  @Get('me/fun-oclock')
+  getMyFunOclock(@CurrentUser() user: JwtUser) {
+    return this.usersService.getFunOclockPreferences(user.sub);
+  }
+
+  @Patch('me/fun-oclock')
+  updateMyFunOclock(
+    @CurrentUser() user: JwtUser,
+    @Body() payload: UpdateFunOclockDto,
+  ) {
+    return this.usersService.updateFunOclockPreferences(user.sub, payload);
+  }
+
+  @Get('admin/national-id/pending')
+  @UseGuards(RolesGuard)
+  @Roles(Role.ADMIN)
+  getPendingNationalIdReviews() {
+    return this.usersService.getPendingNationalIdReviews();
+  }
+
+  @Patch('admin/national-id/:id')
+  @UseGuards(RolesGuard)
+  @Roles(Role.ADMIN)
+  updateNationalIdReviewStatus(
+    @CurrentUser() user: JwtUser,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() payload: UpdateNationalIdStatusDto,
+  ) {
+    return this.usersService.updateNationalIdReviewStatus(user.sub, id, payload);
   }
 }

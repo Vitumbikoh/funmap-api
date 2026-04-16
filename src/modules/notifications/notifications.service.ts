@@ -1,10 +1,12 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
+import { AppConfigService } from '../../shared/config/app-config.service';
 import { PaginationQueryDto } from '../../shared/dto/pagination-query.dto';
 import { NotificationType } from '../../shared/enums/notification-type.enum';
 import { JwtUser } from '../../shared/interfaces/jwt-user.interface';
 import { FcmService } from '../../shared/services/fcm.service';
+import { Event } from '../events/entities/event.entity';
 import { User } from '../users/entities/user.entity';
 import { MarkNotificationsReadDto } from './dto/mark-notifications-read.dto';
 import { RegisterDeviceDto } from './dto/register-device.dto';
@@ -13,7 +15,9 @@ import { NotificationDevice } from './entities/notification-device.entity';
 import { Notification } from './entities/notification.entity';
 
 @Injectable()
-export class NotificationsService {
+export class NotificationsService implements OnModuleInit, OnModuleDestroy {
+  private funOclockTimer?: NodeJS.Timeout;
+
   constructor(
     @InjectRepository(Notification)
     private readonly notificationsRepository: Repository<Notification>,
@@ -21,8 +25,31 @@ export class NotificationsService {
     private readonly devicesRepository: Repository<NotificationDevice>,
     @InjectRepository(User)
     private readonly usersRepository: Repository<User>,
+    @InjectRepository(Event)
+    private readonly eventsRepository: Repository<Event>,
     private readonly fcmService: FcmService,
+    private readonly configService: AppConfigService,
   ) {}
+
+  onModuleInit() {
+    const intervalMinutes = this.configService.funOclockDispatchIntervalMinutes;
+    if (!intervalMinutes || intervalMinutes <= 0) {
+      return;
+    }
+
+    this.funOclockTimer = setInterval(() => {
+      this.dispatchFunOclockDigestForAllUsers().catch(() => {
+        // Keep scheduler resilient to transient DB/network issues.
+      });
+    }, intervalMinutes * 60 * 1000);
+  }
+
+  onModuleDestroy() {
+    if (this.funOclockTimer) {
+      clearInterval(this.funOclockTimer);
+      this.funOclockTimer = undefined;
+    }
+  }
 
   async listForUser(user: JwtUser, query: PaginationQueryDto) {
     const page = query.page ?? 1;
@@ -270,6 +297,152 @@ export class NotificationsService {
     return {
       updated: result.affected ?? 0,
     };
+  }
+
+  async dispatchFunOclockDigestToUser(userId: string) {
+    const user = await this.usersRepository.findOne({ where: { id: userId } });
+
+    if (!user) {
+      return {
+        dispatched: false,
+        reason: 'User not found',
+      };
+    }
+
+    if (!user.funOclockEnabled) {
+      return {
+        dispatched: false,
+        reason: 'Fun o\'clock is disabled for this user',
+      };
+    }
+
+    if (!user.homeLocation?.coordinates || user.homeLocation.coordinates.length < 2) {
+      return {
+        dispatched: false,
+        reason: 'Home location is required for Fun o\'clock notifications',
+      };
+    }
+
+    if (!this.isWithinFunOclockWindow(user)) {
+      return {
+        dispatched: false,
+        reason: 'Current time is outside the configured Fun o\'clock window',
+      };
+    }
+
+    const [longitude, latitude] = user.homeLocation.coordinates;
+    const radiusKm = user.funOclockRadiusKm ?? 5;
+
+    const events = await this.eventsRepository.query(
+      `
+        SELECT
+          e.id,
+          e.title,
+          e.start_date,
+          e.venue_name,
+          ST_Distance(
+            e.location,
+            ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography
+          ) / 1000 AS distance_km
+        FROM events e
+        WHERE e.is_published = true
+          AND e.end_date >= NOW()
+          AND e.start_date <= NOW() + INTERVAL '6 hours'
+          AND ST_DWithin(
+            e.location,
+            ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography,
+            $3 * 1000
+          )
+        ORDER BY e.rsvp_count DESC, e.view_count DESC, e.start_date ASC
+        LIMIT 3
+      `,
+      [longitude, latitude, radiusKm],
+    );
+
+    if (!events.length) {
+      return {
+        dispatched: false,
+        reason: 'No events match current Fun o\'clock window',
+      };
+    }
+
+    const count = events.length;
+    const first = events[0] as Record<string, unknown>;
+    const title = `${count} event${count > 1 ? 's' : ''} near you right now`;
+    const body = `${first['title'] ?? 'Top pick'} is hot in your area. Tap to explore Fun o'clock.`;
+
+    const notification = await this.createNotification(
+      user.id,
+      NotificationType.EVENT,
+      title,
+      body,
+      {
+        action: 'FUN_OCLOCK',
+        eventId: first['id']?.toString() ?? '',
+      },
+    );
+
+    return {
+      dispatched: true,
+      notificationId: notification.id,
+      nearbyEvents: events,
+    };
+  }
+
+  async dispatchFunOclockDigestForAllUsers() {
+    const users = await this.usersRepository.find({
+      where: {
+        funOclockEnabled: true,
+      },
+      select: {
+        id: true,
+        homeLocation: true,
+        funOclockEnabled: true,
+        funOclockDays: true,
+        funOclockStartHour: true,
+        funOclockEndHour: true,
+        funOclockRadiusKm: true,
+      },
+      take: 500,
+    });
+
+    let dispatched = 0;
+
+    for (const user of users) {
+      const result = await this.dispatchFunOclockDigestToUser(user.id);
+      if (result.dispatched) {
+        dispatched += 1;
+      }
+    }
+
+    return {
+      attempted: users.length,
+      dispatched,
+    };
+  }
+
+  private isWithinFunOclockWindow(user: User) {
+    const now = new Date();
+    const startHour = user.funOclockStartHour ?? 20;
+    const endHour = user.funOclockEndHour ?? 23;
+    const days = (user.funOclockDays ?? ['FRI', 'SAT']).map((item) =>
+      item.toUpperCase(),
+    );
+
+    const dayMap = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+    const dayCode = dayMap[now.getDay()];
+
+    if (!days.includes(dayCode)) {
+      return false;
+    }
+
+    const currentHour = now.getHours();
+    if (startHour <= endHour) {
+      return currentHour >= startHour && currentHour <= endHour;
+    }
+
+    // Overnight window support, e.g. 22 -> 2.
+    return currentHour >= startHour || currentHour <= endHour;
   }
 }
 
