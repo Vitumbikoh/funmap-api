@@ -1,4 +1,4 @@
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   IsArray,
@@ -43,10 +43,12 @@ export class UpdateEventDto {
   endDate?: string;
 
   @IsOptional()
+  @Transform(({ value }) => normalizeCategory(value))
   @IsEnum(EventCategory)
   category?: EventCategory;
 
   @IsOptional()
+  @Transform(({ value }) => normalizeText(value))
   @IsString()
   moodTag?: string;
 
@@ -107,4 +109,26 @@ export class UpdateEventDto {
   @IsOptional()
   @IsString()
   country?: string;
+}
+
+function normalizeCategory(value: unknown): EventCategory | undefined {
+  const normalized = normalizeText(value)?.toUpperCase();
+  if (!normalized) {
+    return undefined;
+  }
+
+  if (normalized === 'DINING') {
+    return EventCategory.FOOD;
+  }
+
+  return normalized as EventCategory;
+}
+
+function normalizeText(value: unknown): string | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  return trimmed.length ? trimmed : undefined;
 }

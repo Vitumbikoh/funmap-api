@@ -35,6 +35,42 @@ export class FeedService {
   async getNearbyFeed(query: FeedQueryDto) {
     const radiusKm = query.radiusKm ?? 10;
 
+    const eventParams: unknown[] = [query.longitude, query.latitude, radiusKm];
+    const eventConditions = [
+      'e.end_date >= NOW()',
+      'ST_DWithin(e.location, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography, $3 * 1000)',
+    ];
+
+    if (query.category) {
+      eventParams.push(query.category);
+      eventConditions.push(`e.category = $${eventParams.length}`);
+    }
+
+    if (query.moodTag) {
+      eventParams.push(query.moodTag.toLowerCase());
+      eventConditions.push(
+        `LOWER(COALESCE(e.mood_tag, '')) = $${eventParams.length}`,
+      );
+    }
+
+    if (query.dateBucket === 'TONIGHT') {
+      eventConditions.push(
+        `e.start_date >= date_trunc('day', NOW()) AND e.start_date < date_trunc('day', NOW()) + INTERVAL '1 day'`,
+      );
+    }
+
+    if (query.dateBucket === 'TOMORROW') {
+      eventConditions.push(
+        `e.start_date >= date_trunc('day', NOW()) + INTERVAL '1 day' AND e.start_date < date_trunc('day', NOW()) + INTERVAL '2 day'`,
+      );
+    }
+
+    if (query.dateBucket === 'THIS_WEEK') {
+      eventConditions.push(
+        `e.start_date >= NOW() AND e.start_date < NOW() + INTERVAL '7 day'`,
+      );
+    }
+
     const [posts, reels, events] = await Promise.all([
       this.postsRepository.query(
         `
@@ -158,16 +194,11 @@ export class FeedService {
             ORDER BY promo.boost_multiplier DESC, promo.created_at DESC
             LIMIT 1
           ) event_promo ON TRUE
-          WHERE e.end_date >= NOW()
-            AND ST_DWithin(
-              e.location,
-              ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography,
-              $3 * 1000
-            )
+          WHERE ${eventConditions.join(' AND ')}
           ORDER BY score DESC
           LIMIT 20
         `,
-        [query.longitude, query.latitude, radiusKm],
+        eventParams,
       ),
     ]);
 

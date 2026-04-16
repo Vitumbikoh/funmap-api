@@ -6,12 +6,12 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Point } from 'geojson';
 import { Repository } from 'typeorm';
-import { GeoQueryDto } from '../../shared/dto/geo-query.dto';
 import { EventLifecycleStatus } from '../../shared/enums/event-lifecycle-status.enum';
 import { Role } from '../../shared/enums/role.enum';
 import { RsvpStatus } from '../../shared/enums/rsvp-status.enum';
 import { JwtUser } from '../../shared/interfaces/jwt-user.interface';
 import { CreateEventDto } from './dto/create-event.dto';
+import { NearbyEventsQueryDto } from './dto/nearby-events-query.dto';
 import { UpdateEventDto } from './dto/update-event.dto';
 import { Event } from './entities/event.entity';
 import { Rsvp } from './entities/rsvp.entity';
@@ -81,7 +81,73 @@ export class EventsService {
     return event;
   }
 
-  async findNearby(query: GeoQueryDto) {
+  async findNearby(query: NearbyEventsQueryDto) {
+    const params: unknown[] = [
+      query.longitude,
+      query.latitude,
+      query.radiusKm ?? 10,
+    ];
+
+    const conditions = [
+      'e.is_published = true',
+      'e.end_date >= NOW()',
+      'ST_DWithin(e.location, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography, $3 * 1000)',
+    ];
+
+    if (query.category) {
+      params.push(query.category);
+      conditions.push(`e.category = $${params.length}`);
+    }
+
+    let moodOrderParameterIndex: number | null = null;
+
+    if (query.moodTag) {
+      params.push(query.moodTag.toLowerCase());
+      conditions.push(`LOWER(COALESCE(e.mood_tag, '')) = $${params.length}`);
+      moodOrderParameterIndex = params.length;
+    }
+
+    if (query.dateBucket === 'TONIGHT') {
+      conditions.push(
+        `e.start_date >= date_trunc('day', NOW()) AND e.start_date < date_trunc('day', NOW()) + INTERVAL '1 day'`,
+      );
+    }
+
+    if (query.dateBucket === 'TOMORROW') {
+      conditions.push(
+        `e.start_date >= date_trunc('day', NOW()) + INTERVAL '1 day' AND e.start_date < date_trunc('day', NOW()) + INTERVAL '2 day'`,
+      );
+    }
+
+    if (query.dateBucket === 'THIS_WEEK') {
+      conditions.push(
+        `e.start_date >= NOW() AND e.start_date < NOW() + INTERVAL '7 day'`,
+      );
+    }
+
+    const trendingExpression = `(
+      (
+        COALESCE(event_like_count.value, 0) +
+        COALESCE(event_comment_count.value, 0) +
+        COALESCE(event_share_count.value, 0) +
+        e.rsvp_count +
+        e.payment_count
+      ) >= 12
+      OR e.created_at >= NOW() - INTERVAL '2 hours'
+    )`;
+
+    if (query.mapPinType === 'TRENDING') {
+      conditions.push(trendingExpression);
+    }
+
+    if (query.mapPinType === 'EVENT') {
+      conditions.push(`NOT ${trendingExpression}`);
+    }
+
+    const moodPriorityOrder = moodOrderParameterIndex
+      ? `CASE WHEN LOWER(COALESCE(e.mood_tag, '')) = $${moodOrderParameterIndex} THEN 1 ELSE 0 END DESC,`
+      : '';
+
     return this.eventsRepository.query(
       `
         SELECT
@@ -91,6 +157,7 @@ export class EventsService {
           COALESCE(event_like_count.value, 0) AS "likeCount",
           COALESCE(event_comment_count.value, 0) AS "commentCount",
           COALESCE(event_share_count.value, 0) AS "shareCount",
+          CASE WHEN ${trendingExpression} THEN 'TRENDING' ELSE 'EVENT' END AS "pinType",
           ST_Y(e.location::geometry) AS latitude,
           ST_X(e.location::geometry) AS longitude,
           ST_Distance(
@@ -114,17 +181,11 @@ export class EventsService {
           FROM shares s
           WHERE s.target_type::text = 'EVENT' AND s.target_id = e.id
         ) event_share_count ON TRUE
-        WHERE e.is_published = true
-          AND ST_DWithin(
-            e.location,
-            ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography,
-            $3 * 1000
-          )
-          AND e.end_date >= NOW()
-        ORDER BY e.start_date ASC
+        WHERE ${conditions.join(' AND ')}
+        ORDER BY ${moodPriorityOrder} e.start_date ASC
         LIMIT 50
       `,
-      [query.longitude, query.latitude, query.radiusKm ?? 10],
+      params,
     );
   }
 

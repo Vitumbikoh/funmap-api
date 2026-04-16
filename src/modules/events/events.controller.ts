@@ -11,10 +11,10 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { CurrentUser } from '../../shared/decorators/current-user.decorator';
-import { GeoQueryDto } from '../../shared/dto/geo-query.dto';
 import { JwtAuthGuard } from '../../shared/guards/jwt-auth.guard';
 import { JwtUser } from '../../shared/interfaces/jwt-user.interface';
 import { CreateEventDto } from './dto/create-event.dto';
+import { NearbyEventsQueryDto } from './dto/nearby-events-query.dto';
 import { UpdateEventDto } from './dto/update-event.dto';
 import { EventsService } from './events.service';
 
@@ -23,7 +23,7 @@ export class EventsController {
   constructor(private readonly eventsService: EventsService) {}
 
   @Get('nearby')
-  findNearby(@Query() query: GeoQueryDto) {
+  findNearby(@Query() query: NearbyEventsQueryDto) {
     return this.eventsService.findNearby(query);
   }
 
