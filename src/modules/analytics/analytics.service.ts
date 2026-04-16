@@ -7,6 +7,7 @@ import { Event } from '../events/entities/event.entity';
 import { Payment } from '../payments/entities/payment.entity';
 import { Post } from '../posts/entities/post.entity';
 import { Reel } from '../reels/entities/reel.entity';
+import { User } from '../users/entities/user.entity';
 import { UsersService } from '../users/users.service';
 import { CreatorAnalyticsRange } from './dto/creator-analytics-query.dto';
 
@@ -15,6 +16,8 @@ type MetricName = 'views' | 'rsvps' | 'paidAttendees';
 @Injectable()
 export class AnalyticsService {
   constructor(
+    @InjectRepository(User)
+    private readonly usersRepository: Repository<User>,
     @InjectRepository(Post)
     private readonly postsRepository: Repository<Post>,
     @InjectRepository(Reel)
@@ -107,6 +110,344 @@ export class AnalyticsService {
         series: performance,
       },
     };
+  }
+
+  async getAdminPlatformOverview(
+    range: CreatorAnalyticsRange = CreatorAnalyticsRange.WEEK,
+  ) {
+    const windowStart = this.resolveWindowStart(range);
+
+    const [
+      usage,
+      content,
+      engagement,
+      commerce,
+      safety,
+      topDistricts,
+      topMoods,
+      timeline,
+    ] = await Promise.all([
+      this.fetchAdminUsage(windowStart),
+      this.fetchAdminContent(windowStart),
+      this.fetchAdminEngagement(windowStart),
+      this.fetchAdminCommerce(windowStart),
+      this.fetchAdminSafety(windowStart),
+      this.fetchAdminTopDistricts(windowStart),
+      this.fetchAdminTopMoods(windowStart),
+      this.fetchAdminTimeline(range, windowStart),
+    ]);
+
+    const totalUsers = Number(usage.totalUsers ?? 0);
+    const activeUsers = Number(usage.activeUsers ?? 0);
+    const funOclockUsers = Number(usage.funOclockEnabledUsers ?? 0);
+
+    const funOclockAdoptionRate =
+      totalUsers > 0 ? (funOclockUsers / totalUsers) * 100 : 0;
+    const activeUserRate =
+      totalUsers > 0 ? (activeUsers / totalUsers) * 100 : 0;
+
+    return {
+      filter: {
+        range,
+        windowStart: windowStart.toISOString(),
+        generatedAt: new Date().toISOString(),
+      },
+      usage: {
+        ...usage,
+        activeUserRate: Number(activeUserRate.toFixed(2)),
+      },
+      content,
+      engagement,
+      commerce,
+      safety,
+      behavior: {
+        topDistricts,
+        topMoodTags: topMoods,
+        funOclockAdoptionRate: Number(funOclockAdoptionRate.toFixed(2)),
+      },
+      timeline,
+    };
+  }
+
+  private async fetchAdminUsage(windowStart: Date) {
+    const [row] = await this.usersRepository.query(
+      `
+        SELECT
+          COUNT(*)::int AS "totalUsers",
+          COUNT(*) FILTER (WHERE u.created_at >= $1)::int AS "newUsers",
+          COUNT(*) FILTER (WHERE u.last_active_at IS NOT NULL AND u.last_active_at >= $1)::int AS "activeUsers",
+          COUNT(*) FILTER (WHERE 'CAPITAL_USER' = ANY(u.roles) OR 'BUSINESS' = ANY(u.roles))::int AS "capitalUsers",
+          COUNT(*) FILTER (WHERE 'ADMIN' = ANY(u.roles))::int AS "adminUsers",
+          COUNT(*) FILTER (WHERE u.fun_oclock_enabled = true)::int AS "funOclockEnabledUsers"
+        FROM users u
+      `,
+      [windowStart],
+    );
+
+    return {
+      totalUsers: Number(row?.totalUsers ?? 0),
+      newUsers: Number(row?.newUsers ?? 0),
+      activeUsers: Number(row?.activeUsers ?? 0),
+      capitalUsers: Number(row?.capitalUsers ?? 0),
+      adminUsers: Number(row?.adminUsers ?? 0),
+      funOclockEnabledUsers: Number(row?.funOclockEnabledUsers ?? 0),
+    };
+  }
+
+  private async fetchAdminContent(windowStart: Date) {
+    const [row] = await this.postsRepository.query(
+      `
+        SELECT
+          (SELECT COUNT(*) FROM posts p WHERE p.created_at >= $1)::int AS posts,
+          (SELECT COUNT(*) FROM reels r WHERE r.created_at >= $1)::int AS reels,
+          (SELECT COUNT(*) FROM events e WHERE e.created_at >= $1)::int AS events,
+          (SELECT COUNT(*) FROM events e WHERE e.created_at >= $1 AND e.status = 'LIVE')::int AS "liveEvents",
+          (SELECT COUNT(*) FROM events e WHERE e.created_at >= $1 AND e.status = 'UPCOMING')::int AS "upcomingEvents",
+          (SELECT COUNT(*) FROM events e WHERE e.created_at >= $1 AND e.payment_required = true)::int AS "ticketedEvents"
+      `,
+      [windowStart],
+    );
+
+    return {
+      posts: Number(row?.posts ?? 0),
+      reels: Number(row?.reels ?? 0),
+      events: Number(row?.events ?? 0),
+      liveEvents: Number(row?.liveEvents ?? 0),
+      upcomingEvents: Number(row?.upcomingEvents ?? 0),
+      ticketedEvents: Number(row?.ticketedEvents ?? 0),
+    };
+  }
+
+  private async fetchAdminEngagement(windowStart: Date) {
+    const [row] = await this.postsRepository.query(
+      `
+        SELECT
+          (SELECT COUNT(*) FROM views v WHERE v.created_at >= $1)::int AS views,
+          (SELECT COUNT(*) FROM likes l WHERE l.created_at >= $1)::int AS likes,
+          (SELECT COUNT(*) FROM comments c WHERE c.created_at >= $1)::int AS comments,
+          (SELECT COUNT(*) FROM shares s WHERE s.created_at >= $1)::int AS shares,
+          (SELECT COUNT(*) FROM rsvps r WHERE r.created_at >= $1)::int AS rsvps,
+          (SELECT COUNT(*) FROM rsvps r WHERE r.created_at >= $1 AND r.paid_at IS NOT NULL)::int AS "paidRsvps"
+      `,
+      [windowStart],
+    );
+
+    const views = Number(row?.views ?? 0);
+    const likes = Number(row?.likes ?? 0);
+    const comments = Number(row?.comments ?? 0);
+    const shares = Number(row?.shares ?? 0);
+    const rsvps = Number(row?.rsvps ?? 0);
+    const paidRsvps = Number(row?.paidRsvps ?? 0);
+
+    const totalInteractions = likes + comments + shares;
+    const conversionRate = rsvps > 0 ? (paidRsvps / rsvps) * 100 : 0;
+
+    return {
+      views,
+      likes,
+      comments,
+      shares,
+      totalInteractions,
+      rsvps,
+      paidRsvps,
+      paidRsvpConversionRate: Number(conversionRate.toFixed(2)),
+    };
+  }
+
+  private async fetchAdminCommerce(windowStart: Date) {
+    const [row] = await this.paymentsRepository.query(
+      `
+        SELECT
+          COUNT(*) FILTER (WHERE p.created_at >= $1)::int AS "paymentAttempts",
+          COUNT(*) FILTER (WHERE p.created_at >= $1 AND p.status = $2)::int AS "successfulPayments",
+          COALESCE(SUM(CASE WHEN p.created_at >= $1 AND p.status = $2 THEN p.amount::numeric ELSE 0 END), 0)::float AS "totalRevenue"
+        FROM payments p
+      `,
+      [windowStart, PaymentStatus.SUCCESS],
+    );
+
+    const paymentAttempts = Number(row?.paymentAttempts ?? 0);
+    const successfulPayments = Number(row?.successfulPayments ?? 0);
+    const successRate =
+      paymentAttempts > 0 ? (successfulPayments / paymentAttempts) * 100 : 0;
+
+    return {
+      paymentAttempts,
+      successfulPayments,
+      successRate: Number(successRate.toFixed(2)),
+      totalRevenue: Number(row?.totalRevenue ?? 0),
+      currency: 'MWK',
+    };
+  }
+
+  private async fetchAdminSafety(windowStart: Date) {
+    const [row] = await this.usersRepository.query(
+      `
+        SELECT
+          (SELECT COUNT(*) FROM reports rp WHERE rp.created_at >= $1)::int AS "reportsCreated",
+          (SELECT COUNT(*) FROM reports rp WHERE rp.status = 'OPEN')::int AS "openReports",
+          (SELECT COUNT(*) FROM reports rp WHERE rp.created_at >= $1 AND rp.status = 'RESOLVED')::int AS "resolvedReports",
+          (SELECT COUNT(*) FROM users u WHERE u.national_id_status = 'PENDING')::int AS "pendingNationalIdReviews",
+          (SELECT COUNT(*) FROM users u WHERE u.national_id_status = 'VERIFIED')::int AS "verifiedNationalIds"
+      `,
+      [windowStart],
+    );
+
+    return {
+      reportsCreated: Number(row?.reportsCreated ?? 0),
+      openReports: Number(row?.openReports ?? 0),
+      resolvedReports: Number(row?.resolvedReports ?? 0),
+      pendingNationalIdReviews: Number(row?.pendingNationalIdReviews ?? 0),
+      verifiedNationalIds: Number(row?.verifiedNationalIds ?? 0),
+    };
+  }
+
+  private async fetchAdminTopDistricts(windowStart: Date) {
+    const rows = (await this.postsRepository.query(
+      `
+        SELECT district, COUNT(*)::int AS count
+        FROM (
+          SELECT p.district
+          FROM posts p
+          WHERE p.created_at >= $1 AND p.district IS NOT NULL AND btrim(p.district) <> ''
+
+          UNION ALL
+
+          SELECT e.district
+          FROM events e
+          WHERE e.created_at >= $1 AND e.district IS NOT NULL AND btrim(e.district) <> ''
+
+          UNION ALL
+
+          SELECT u.district
+          FROM users u
+          WHERE u.created_at >= $1 AND u.district IS NOT NULL AND btrim(u.district) <> ''
+        ) source
+        GROUP BY district
+        ORDER BY count DESC, district ASC
+        LIMIT 5
+      `,
+      [windowStart],
+    )) as Array<{ district: string; count: number }>;
+
+    return rows.map((row) => ({
+      district: row.district,
+      count: Number(row.count ?? 0),
+    }));
+  }
+
+  private async fetchAdminTopMoods(windowStart: Date) {
+    const rows = (await this.postsRepository.query(
+      `
+        SELECT mood_tag AS mood, COUNT(*)::int AS count
+        FROM (
+          SELECT p.mood_tag
+          FROM posts p
+          WHERE p.created_at >= $1 AND p.mood_tag IS NOT NULL AND btrim(p.mood_tag) <> ''
+
+          UNION ALL
+
+          SELECT r.mood_tag
+          FROM reels r
+          WHERE r.created_at >= $1 AND r.mood_tag IS NOT NULL AND btrim(r.mood_tag) <> ''
+
+          UNION ALL
+
+          SELECT e.mood_tag
+          FROM events e
+          WHERE e.created_at >= $1 AND e.mood_tag IS NOT NULL AND btrim(e.mood_tag) <> ''
+        ) source
+        GROUP BY mood_tag
+        ORDER BY count DESC, mood_tag ASC
+        LIMIT 5
+      `,
+      [windowStart],
+    )) as Array<{ mood: string; count: number }>;
+
+    return rows.map((row) => ({
+      mood: row.mood,
+      count: Number(row.count ?? 0),
+    }));
+  }
+
+  private async fetchAdminTimeline(
+    range: CreatorAnalyticsRange,
+    windowStart: Date,
+  ) {
+    const [signups, contentItems, successfulPayments] = await Promise.all([
+      this.fetchTimedRows(
+        `
+          SELECT u.created_at AS "createdAt"
+          FROM users u
+          WHERE u.created_at >= $1
+        `,
+        [windowStart],
+      ),
+      this.fetchTimedRows(
+        `
+          SELECT p.created_at AS "createdAt"
+          FROM posts p
+          WHERE p.created_at >= $1
+
+          UNION ALL
+
+          SELECT r.created_at AS "createdAt"
+          FROM reels r
+          WHERE r.created_at >= $1
+
+          UNION ALL
+
+          SELECT e.created_at AS "createdAt"
+          FROM events e
+          WHERE e.created_at >= $1
+        `,
+        [windowStart],
+      ),
+      this.fetchTimedRows(
+        `
+          SELECT p.created_at AS "createdAt"
+          FROM payments p
+          WHERE p.created_at >= $1
+            AND p.status = $2
+        `,
+        [windowStart, PaymentStatus.SUCCESS],
+      ),
+    ]);
+
+    const buckets = this.createBuckets(range, windowStart);
+
+    for (const value of signups) {
+      this.incrementTimelineBucket(buckets, value, 'signups');
+    }
+
+    for (const value of contentItems) {
+      this.incrementTimelineBucket(buckets, value, 'contentItems');
+    }
+
+    for (const value of successfulPayments) {
+      this.incrementTimelineBucket(buckets, value, 'successfulPayments');
+    }
+
+    return buckets.map((bucket) => ({
+      label: bucket.label,
+      signups: bucket.signups,
+      contentItems: bucket.contentItems,
+      successfulPayments: bucket.successfulPayments,
+    }));
+  }
+
+  private incrementTimelineBucket(
+    buckets: _AnalyticsBucket[],
+    value: Date,
+    metric: 'signups' | 'contentItems' | 'successfulPayments',
+  ) {
+    for (const bucket of buckets) {
+      if (value.getTime() >= bucket.start.getTime() &&
+          value.getTime() < bucket.end.getTime()) {
+        bucket.incrementTimeline(metric);
+        break;
+      }
+    }
   }
 
   private async countPosts(userId: string, windowStart: Date) {
@@ -520,6 +861,9 @@ class _AnalyticsBucket {
   views = 0;
   rsvps = 0;
   paidAttendees = 0;
+  signups = 0;
+  contentItems = 0;
+  successfulPayments = 0;
 
   constructor(
     readonly label: string,
@@ -528,6 +872,10 @@ class _AnalyticsBucket {
   ) {}
 
   increment(metric: MetricName) {
+    this[metric] += 1;
+  }
+
+  incrementTimeline(metric: 'signups' | 'contentItems' | 'successfulPayments') {
     this[metric] += 1;
   }
 }

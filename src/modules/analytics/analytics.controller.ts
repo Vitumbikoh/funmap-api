@@ -37,4 +37,11 @@ export class AnalyticsController {
   ) {
     return this.analyticsService.getCreatorAnalytics(userId, query.range);
   }
+
+  @Get('admin/platform-overview')
+  @UseGuards(RolesGuard)
+  @Roles(Role.ADMIN)
+  getAdminPlatformOverview(@Query() query: CreatorAnalyticsQueryDto) {
+    return this.analyticsService.getAdminPlatformOverview(query.range);
+  }
 }

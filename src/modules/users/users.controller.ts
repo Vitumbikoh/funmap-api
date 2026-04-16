@@ -21,6 +21,8 @@ import { DeactivateAccountDto } from './dto/deactivate-account.dto';
 import { UpdateFunOclockDto } from './dto/update-fun-oclock.dto';
 import { UpdateNationalIdStatusDto } from './dto/update-national-id-status.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
+import { AdminListUsersQueryDto } from './dto/admin-list-users-query.dto';
+import { AdminUpdateAccountStatusDto } from './dto/admin-update-account-status.dto';
 import { UsersService } from './users.service';
 
 @Controller('users')
@@ -113,5 +115,27 @@ export class UsersController {
     @Body() payload: UpdateNationalIdStatusDto,
   ) {
     return this.usersService.updateNationalIdReviewStatus(user.sub, id, payload);
+  }
+
+  @Get('admin/users')
+  @UseGuards(RolesGuard)
+  @Roles(Role.ADMIN)
+  listUsersForAdmin(@Query() query: AdminListUsersQueryDto) {
+    return this.usersService.listUsersForAdmin(query);
+  }
+
+  @Patch('admin/users/:id/status')
+  @UseGuards(RolesGuard)
+  @Roles(Role.ADMIN)
+  updateUserAccountStatus(
+    @CurrentUser() user: JwtUser,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() payload: AdminUpdateAccountStatusDto,
+  ) {
+    return this.usersService.updateUserAccountStatusForAdmin(
+      user.sub,
+      id,
+      payload,
+    );
   }
 }

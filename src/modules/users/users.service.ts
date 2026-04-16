@@ -26,6 +26,8 @@ import { Reel } from '../reels/entities/reel.entity';
 import { UpdateFunOclockDto } from './dto/update-fun-oclock.dto';
 import { UpdateNationalIdStatusDto } from './dto/update-national-id-status.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
+import { AdminListUsersQueryDto } from './dto/admin-list-users-query.dto';
+import { AdminUpdateAccountStatusDto } from './dto/admin-update-account-status.dto';
 import { User } from './entities/user.entity';
 
 @Injectable()
@@ -398,6 +400,118 @@ export class UsersService {
       reviewedBy: reviewerUserId,
       note: payload.note?.trim() || null,
       user: this.sanitizeUser(saved),
+    };
+  }
+
+  async listUsersForAdmin(query: AdminListUsersQueryDto) {
+    const page = query.page ?? 1;
+    const limit = Math.min(query.limit ?? 20, 100);
+    const offset = (page - 1) * limit;
+
+    const qb = this.usersRepository
+      .createQueryBuilder('user')
+      .orderBy('user.updatedAt', 'DESC')
+      .skip(offset)
+      .take(limit);
+
+    if (query.search && query.search.trim().length > 0) {
+      const search = `%${query.search.trim()}%`;
+      qb.andWhere(
+        `(
+          user.displayName ILIKE :search OR
+          user.username ILIKE :search OR
+          user.phoneNumber ILIKE :search OR
+          user.email ILIKE :search
+        )`,
+        { search },
+      );
+    }
+
+    if (query.status) {
+      qb.andWhere('user.accountStatus = :status', {
+        status: query.status,
+      });
+    }
+
+    if (query.role) {
+      qb.andWhere(':role = ANY(user.roles)', {
+        role: query.role,
+      });
+    }
+
+    const [items, total] = await qb.getManyAndCount();
+
+    return {
+      items: items.map((item) => ({
+        id: item.id,
+        displayName: item.displayName,
+        username: item.username,
+        phoneNumber: item.phoneNumber,
+        email: item.email,
+        roles: item.roles,
+        accountStatus: item.accountStatus,
+        nationalIdStatus: item.nationalIdStatus,
+        district: item.district,
+        region: item.region,
+        country: item.country,
+        lastActiveAt: item.lastActiveAt,
+        createdAt: item.createdAt,
+        updatedAt: item.updatedAt,
+      })),
+      total,
+      page,
+      limit,
+    };
+  }
+
+  async updateUserAccountStatusForAdmin(
+    reviewerUserId: string,
+    targetUserId: string,
+    payload: AdminUpdateAccountStatusDto,
+  ) {
+    const user = await this.findById(targetUserId);
+
+    if (payload.status === AccountStatus.DELETED) {
+      throw new BadRequestException('Use permanent account delete workflow for DELETED status.');
+    }
+
+    if (reviewerUserId === targetUserId && payload.status !== AccountStatus.ACTIVE) {
+      throw new BadRequestException('Admins cannot deactivate their own account from this workflow.');
+    }
+
+    if (payload.status === AccountStatus.ACTIVE) {
+      user.accountStatus = AccountStatus.ACTIVE;
+      user.deactivatedUntil = null;
+    } else if (payload.status === AccountStatus.DEACTIVATED) {
+      user.accountStatus = AccountStatus.DEACTIVATED;
+      if (payload.reactivateAt) {
+        const reactivateAt = new Date(payload.reactivateAt);
+        if (Number.isNaN(reactivateAt.getTime())) {
+          throw new BadRequestException('Provide a valid reactivation date and time.');
+        }
+        user.deactivatedUntil = reactivateAt;
+      } else {
+        user.deactivatedUntil = null;
+      }
+
+      await this.sessionsRepository.delete({ userId: user.id });
+    }
+
+    user.lastActiveAt = new Date();
+    const saved = await this.usersRepository.save(user);
+
+    return {
+      message: `Account status updated to ${saved.accountStatus}.`,
+      reviewedBy: reviewerUserId,
+      user: {
+        id: saved.id,
+        displayName: saved.displayName,
+        username: saved.username,
+        phoneNumber: saved.phoneNumber,
+        roles: saved.roles,
+        accountStatus: saved.accountStatus,
+        deactivatedUntil: saved.deactivatedUntil,
+      },
     };
   }
 
