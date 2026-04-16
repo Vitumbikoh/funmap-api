@@ -49,5 +49,17 @@ export class ChatGateway {
   ) {
     this.server.to(roomId).emit('message:read', payload);
   }
+
+  emitDeliveredReceipt(
+    roomId: string,
+    payload: {
+      roomId: string;
+      userId: string;
+      deliveredAt: string;
+      messageIds: string[];
+    },
+  ) {
+    this.server.to(roomId).emit('message:delivered', payload);
+  }
 }
 

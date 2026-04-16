@@ -336,6 +336,7 @@ export class ChatService {
 
   async listMessages(user: JwtUser, roomId: string) {
     await this.ensureParticipant(user.sub, roomId);
+    await this.markRoomMessagesDelivered(user.sub, roomId);
 
     return this.messagesRepository.query(
       `
@@ -349,6 +350,7 @@ export class ChatService {
           m.created_at AS "createdAt",
           m.updated_at AS "updatedAt",
           COALESCE(u.username, u.display_name, 'FunMap user') AS "senderName",
+          u.username AS "senderUsername",
           u.avatar_url AS "senderAvatarUrl"
         FROM messages m
         INNER JOIN users u ON u.id = m.sender_id
@@ -393,8 +395,8 @@ export class ChatService {
 
     const enrichedMessage = {
       ...savedMessage,
-      senderName:
-        sender?.displayName ?? sender?.username ?? 'FunMap user',
+      senderName: sender?.username ?? sender?.displayName ?? 'FunMap user',
+      senderUsername: sender?.username ?? null,
       senderAvatarUrl: sender?.avatarUrl ?? null,
     };
 
@@ -515,6 +517,67 @@ export class ChatService {
       readAt: readAt.toISOString(),
       messageIds: unseenMessages.map((message) => message.id),
     };
+  }
+
+  private async markRoomMessagesDelivered(userId: string, roomId: string) {
+    const deliveredAt = new Date();
+
+    const candidateMessages = await this.messagesRepository.find({
+      where: {
+        roomId,
+        senderId: Not(userId),
+      },
+      order: {
+        createdAt: 'ASC',
+      },
+      take: 200,
+    });
+
+    if (candidateMessages.length === 0) {
+      return;
+    }
+
+    const newlyDelivered: Message[] = [];
+    const deliveredMessageIds: string[] = [];
+
+    for (const message of candidateMessages) {
+      const metadata = message.metadata ?? {};
+      const deliveredBy =
+        metadata.deliveredBy && typeof metadata.deliveredBy === 'object'
+          ? (metadata.deliveredBy as Record<string, string>)
+          : {};
+
+      if (deliveredBy[userId]) {
+        continue;
+      }
+
+      deliveredMessageIds.push(message.id);
+      newlyDelivered.push(
+        this.messagesRepository.create({
+          ...message,
+          metadata: {
+            ...metadata,
+            deliveredBy: {
+              ...deliveredBy,
+              [userId]: deliveredAt.toISOString(),
+            },
+          },
+        }),
+      );
+    }
+
+    if (newlyDelivered.length === 0) {
+      return;
+    }
+
+    await this.messagesRepository.save(newlyDelivered);
+
+    this.chatGateway.emitDeliveredReceipt(roomId, {
+      roomId,
+      userId,
+      deliveredAt: deliveredAt.toISOString(),
+      messageIds: deliveredMessageIds,
+    });
   }
 
   private async ensureParticipant(userId: string, roomId: string) {
