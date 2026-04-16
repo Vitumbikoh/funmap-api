@@ -1,6 +1,7 @@
 import { Body, Controller, Post } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { CredentialLoginDto } from './dto/credential-login.dto';
+import { RegisterBusinessRequestOtpDto } from './dto/register-business-request-otp.dto';
 import { RegisterAdminDto } from './dto/register-admin.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { RegisterRequestOtpDto } from './dto/register-request-otp.dto';
@@ -18,7 +19,7 @@ export class AuthController {
   }
 
   @Post('register/business/request-otp')
-  requestBusinessRegistrationOtp(@Body() payload: RegisterRequestOtpDto) {
+  requestBusinessRegistrationOtp(@Body() payload: RegisterBusinessRequestOtpDto) {
     return this.authService.requestBusinessRegistrationOtp(payload);
   }
 

@@ -17,6 +17,7 @@ import { SubscriptionPlan } from '../../shared/enums/subscription-plan.enum';
 import { JwtUser } from '../../shared/interfaces/jwt-user.interface';
 import { User } from '../users/entities/user.entity';
 import { CredentialLoginDto } from './dto/credential-login.dto';
+import { RegisterBusinessRequestOtpDto } from './dto/register-business-request-otp.dto';
 import { RegisterAdminDto } from './dto/register-admin.dto';
 import { RegisterRequestOtpDto } from './dto/register-request-otp.dto';
 import { RequestOtpDto } from './dto/request-otp.dto';
@@ -42,7 +43,7 @@ export class AuthService {
     return this.requestRegistrationOtpByRoles(payload, [Role.CLIENT]);
   }
 
-  async requestBusinessRegistrationOtp(payload: RegisterRequestOtpDto) {
+  async requestBusinessRegistrationOtp(payload: RegisterBusinessRequestOtpDto) {
     return this.requestRegistrationOtpByRoles(payload, [
       Role.BUSINESS,
       Role.CAPITAL_USER,
@@ -110,7 +111,7 @@ export class AuthService {
   }
 
   private async requestRegistrationOtpByRoles(
-    payload: RegisterRequestOtpDto,
+    payload: RegisterRequestOtpDto | RegisterBusinessRequestOtpDto,
     roles: Role[],
   ) {
     const normalizedPhoneNumber = this.normalizePhoneNumber(payload.phoneNumber);
