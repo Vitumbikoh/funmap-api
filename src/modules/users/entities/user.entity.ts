@@ -9,6 +9,7 @@ import { AccountStatus } from '../../../shared/enums/account-status.enum';
 import { BusinessCategory } from '../../../shared/enums/business-category.enum';
 import { BusinessCoverage } from '../../../shared/enums/business-coverage.enum';
 import { BusinessVerificationStatus } from '../../../shared/enums/business-verification-status.enum';
+import { Gender } from '../../../shared/enums/gender.enum';
 import { NationalIdStatus } from '../../../shared/enums/national-id-status.enum';
 import { Role } from '../../../shared/enums/role.enum';
 import { SubscriptionPlan } from '../../../shared/enums/subscription-plan.enum';
@@ -32,6 +33,16 @@ export class User extends BaseEntity {
 
   @Column({ name: 'display_name', type: 'varchar', length: 100, nullable: true })
   displayName?: string | null;
+
+  @Column({
+    type: 'enum',
+    enum: Gender,
+    default: Gender.UNKNOWN,
+  })
+  gender: Gender;
+
+  @Column({ name: 'date_of_birth', type: 'date', nullable: true })
+  dateOfBirth?: string | null;
 
   @Column({ name: 'avatar_url', type: 'text', nullable: true })
   avatarUrl?: string | null;

@@ -293,7 +293,7 @@ export class ChatService {
           cr.updated_at AS "updatedAt",
           cr.last_message_at AS "lastMessageAt",
           CASE
-            WHEN cr.type = 'PRIVATE' THEN COALESCE(other_user.display_name, other_user.username, 'Private Chat')
+            WHEN cr.type = 'PRIVATE' THEN COALESCE(other_user.username, other_user.display_name, 'Private Chat')
             ELSE COALESCE(cr.title, 'Chat Room')
           END AS title,
           cp.last_read_at AS "lastReadAt",
@@ -348,7 +348,7 @@ export class ChatService {
           m.metadata,
           m.created_at AS "createdAt",
           m.updated_at AS "updatedAt",
-          COALESCE(u.display_name, u.username, 'FunMap user') AS "senderName",
+          COALESCE(u.username, u.display_name, 'FunMap user') AS "senderName",
           u.avatar_url AS "senderAvatarUrl"
         FROM messages m
         INNER JOIN users u ON u.id = m.sender_id

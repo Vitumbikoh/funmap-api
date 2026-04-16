@@ -11,6 +11,7 @@ import { In, Repository } from 'typeorm';
 import { AppConfigService } from '../../shared/config/app-config.service';
 import { AccountStatus } from '../../shared/enums/account-status.enum';
 import { BusinessVerificationStatus } from '../../shared/enums/business-verification-status.enum';
+import { Gender } from '../../shared/enums/gender.enum';
 import { Role } from '../../shared/enums/role.enum';
 import { SubscriptionPlan } from '../../shared/enums/subscription-plan.enum';
 import { JwtUser } from '../../shared/interfaces/jwt-user.interface';
@@ -113,7 +114,6 @@ export class AuthService {
     roles: Role[],
   ) {
     const normalizedPhoneNumber = this.normalizePhoneNumber(payload.phoneNumber);
-    const normalizedUsername = payload.username?.trim().toLowerCase();
     const normalizedEmail = payload.email?.trim().toLowerCase();
     const isBusinessRegistration =
       roles.includes(Role.BUSINESS) || roles.includes(Role.CAPITAL_USER);
@@ -127,18 +127,9 @@ export class AuthService {
       throw new ConflictException('An account already exists for this phone number.');
     }
 
-    if (normalizedUsername) {
-      const existingByUsername = await this.usersRepository.findOne({
-        where: { username: normalizedUsername },
-      });
-
-      if (
-        existingByUsername &&
-        existingByUsername.phoneNumber !== normalizedPhoneNumber
-      ) {
-        throw new ConflictException('Username is already taken.');
-      }
-    }
+    const generatedUsername =
+      existingByPhone?.username ??
+      (await this.generateUniqueFunmapUsername(displayName));
 
     if (normalizedEmail) {
       const existingByEmail = await this.usersRepository.findOne({
@@ -160,7 +151,11 @@ export class AuthService {
       phoneNumber: normalizedPhoneNumber,
       email: normalizedEmail ?? existingByPhone?.email,
       displayName: displayName,
-      username: normalizedUsername,
+      username: generatedUsername,
+      gender: payload.gender ?? existingByPhone?.gender ?? Gender.UNKNOWN,
+      dateOfBirth:
+        this.normalizeDateOfBirth(payload.dateOfBirth) ??
+        existingByPhone?.dateOfBirth,
       businessName: isBusinessRegistration
         ? displayName
         : existingByPhone?.businessName,
@@ -481,6 +476,51 @@ export class AuthService {
         phoneNumber: In(aliases),
       },
     });
+  }
+
+  private async generateUniqueFunmapUsername(seed: string): Promise<string> {
+    const base =
+      seed
+        .toLowerCase()
+        .replace(/[^a-z0-9]/g, '')
+        .slice(0, 18) || 'user';
+
+    let candidate = `${base}@funmap`;
+    let existing = await this.usersRepository.findOne({
+      where: { username: candidate },
+      select: { id: true },
+    });
+
+    if (!existing) {
+      return candidate;
+    }
+
+    for (let i = 0; i < 9; i += 1) {
+      const suffix = Math.floor(100 + Math.random() * 900);
+      candidate = `${base}${suffix}@funmap`;
+      existing = await this.usersRepository.findOne({
+        where: { username: candidate },
+        select: { id: true },
+      });
+      if (!existing) {
+        return candidate;
+      }
+    }
+
+    return `user${Date.now()}@funmap`;
+  }
+
+  private normalizeDateOfBirth(value?: string): string | undefined {
+    if (!value) {
+      return undefined;
+    }
+
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) {
+      return undefined;
+    }
+
+    return parsed.toISOString().slice(0, 10);
   }
 
   private async ensureAccountCanAuthenticate(user: User): Promise<User> {

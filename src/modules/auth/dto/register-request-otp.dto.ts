@@ -1,12 +1,15 @@
 import { Transform } from 'class-transformer';
 import {
+  IsDateString,
   IsEmail,
+  IsEnum,
   IsOptional,
   IsString,
   Matches,
   MaxLength,
   MinLength,
 } from 'class-validator';
+import { Gender } from '../../../shared/enums/gender.enum';
 
 export class RegisterRequestOtpDto {
   @Transform(({ value }) =>
@@ -21,6 +24,12 @@ export class RegisterRequestOtpDto {
   @MaxLength(100)
   displayName!: string;
 
+  @IsEnum(Gender)
+  gender!: Gender;
+
+  @IsDateString()
+  dateOfBirth!: string;
+
   @IsOptional()
   @IsEmail()
   @MaxLength(160)
@@ -30,11 +39,6 @@ export class RegisterRequestOtpDto {
   @IsString()
   @MaxLength(140)
   businessName?: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(60)
-  username?: string;
 
   @IsString()
   @MinLength(8)
