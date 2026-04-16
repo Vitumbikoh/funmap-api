@@ -5,6 +5,7 @@ import {
 } from 'typeorm';
 import { Point } from 'geojson';
 import { BaseEntity } from '../../../shared/database/base.entity';
+import { AccountStatus } from '../../../shared/enums/account-status.enum';
 import { BusinessCategory } from '../../../shared/enums/business-category.enum';
 import { BusinessCoverage } from '../../../shared/enums/business-coverage.enum';
 import { BusinessVerificationStatus } from '../../../shared/enums/business-verification-status.enum';
@@ -121,4 +122,15 @@ export class User extends BaseEntity {
 
   @Column({ name: 'last_active_at', type: 'timestamptz', nullable: true })
   lastActiveAt?: Date | null;
+
+  @Column({
+    name: 'account_status',
+    type: 'enum',
+    enum: AccountStatus,
+    default: AccountStatus.ACTIVE,
+  })
+  accountStatus: AccountStatus;
+
+  @Column({ name: 'deactivated_until', type: 'timestamptz', nullable: true })
+  deactivatedUntil?: Date | null;
 }

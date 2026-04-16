@@ -9,6 +9,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import * as bcrypt from 'bcrypt';
 import { In, Repository } from 'typeorm';
 import { AppConfigService } from '../../shared/config/app-config.service';
+import { AccountStatus } from '../../shared/enums/account-status.enum';
 import { BusinessVerificationStatus } from '../../shared/enums/business-verification-status.enum';
 import { Role } from '../../shared/enums/role.enum';
 import { SubscriptionPlan } from '../../shared/enums/subscription-plan.enum';
@@ -230,24 +231,40 @@ export class AuthService {
       throw new UnauthorizedException('Invalid credentials.');
     }
 
-    if (!user.isVerified) {
+    const eligibleUser = await this.ensureAccountCanAuthenticate(user);
+
+    if (!eligibleUser.isVerified) {
       throw new UnauthorizedException('Complete OTP verification first.');
     }
 
-    const isPasswordValid = await bcrypt.compare(payload.password, user.passwordHash);
+    if (!eligibleUser.passwordHash) {
+      throw new UnauthorizedException('Invalid credentials.');
+    }
+
+    const isPasswordValid = await bcrypt.compare(
+      payload.password,
+      eligibleUser.passwordHash,
+    );
     if (!isPasswordValid) {
       throw new UnauthorizedException('Invalid credentials.');
     }
 
-    user.lastActiveAt = new Date();
-    const savedUser = await this.usersRepository.save(user);
+    eligibleUser.lastActiveAt = new Date();
+    const savedUser = await this.usersRepository.save(eligibleUser);
 
     return this.createSession(savedUser, payload.deviceId);
   }
 
   async requestOtp(payload: RequestOtpDto) {
     const purpose = payload.purpose ?? 'LOGIN';
-    const otpPayload = await this.issueOtp(this.normalizePhoneNumber(payload.phoneNumber), purpose);
+    const normalizedPhoneNumber = this.normalizePhoneNumber(payload.phoneNumber);
+    const user = await this.findUserByPhoneNumber(normalizedPhoneNumber);
+
+    if (user) {
+      await this.ensureAccountCanAuthenticate(user);
+    }
+
+    const otpPayload = await this.issueOtp(normalizedPhoneNumber, purpose);
 
     return {
       message: 'OTP created',
@@ -272,8 +289,10 @@ export class AuthService {
         lastActiveAt: new Date(),
       });
     } else {
-      user.isVerified = true;
-      user.lastActiveAt = new Date();
+      const eligibleUser = await this.ensureAccountCanAuthenticate(user);
+      eligibleUser.isVerified = true;
+      eligibleUser.lastActiveAt = new Date();
+      user = eligibleUser;
     }
 
     user = await this.usersRepository.save(user);
@@ -306,6 +325,8 @@ export class AuthService {
     if (!isTokenValid || session.expiresAt.getTime() < Date.now()) {
       throw new UnauthorizedException('Refresh token invalid');
     }
+
+    await this.ensureAccountCanAuthenticate(session.user);
 
     session.lastUsedAt = new Date();
     await this.sessionsRepository.save(session);
@@ -460,6 +481,29 @@ export class AuthService {
         phoneNumber: In(aliases),
       },
     });
+  }
+
+  private async ensureAccountCanAuthenticate(user: User): Promise<User> {
+    if (user.accountStatus === AccountStatus.DELETED) {
+      throw new UnauthorizedException('This account has been deleted permanently.');
+    }
+
+    if (user.accountStatus !== AccountStatus.DEACTIVATED) {
+      return user;
+    }
+
+    const deactivatedUntil = user.deactivatedUntil;
+
+    if (!deactivatedUntil || deactivatedUntil.getTime() > Date.now()) {
+      const reactivateAt = deactivatedUntil?.toISOString() ?? 'a later time';
+      throw new UnauthorizedException(
+        `Account is deactivated. Try again after ${reactivateAt}.`,
+      );
+    }
+
+    user.accountStatus = AccountStatus.ACTIVE;
+    user.deactivatedUntil = null;
+    return this.usersRepository.save(user);
   }
 
   private sanitizeUser(user: User) {

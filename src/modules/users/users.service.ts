@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   NotFoundException,
@@ -8,12 +9,14 @@ import { Point } from 'geojson';
 import { Not, Repository } from 'typeorm';
 import { Like } from '../../shared/database/entities/like.entity';
 import { GeoQueryDto } from '../../shared/dto/geo-query.dto';
+import { AccountStatus } from '../../shared/enums/account-status.enum';
 import { BusinessVerificationStatus } from '../../shared/enums/business-verification-status.enum';
 import { ContentTarget } from '../../shared/enums/content-target.enum';
 import { PaymentStatus } from '../../shared/enums/payment-status.enum';
 import { Role } from '../../shared/enums/role.enum';
 import { RsvpStatus } from '../../shared/enums/rsvp-status.enum';
 import { SubscriptionPlan } from '../../shared/enums/subscription-plan.enum';
+import { Session } from '../auth/entities/session.entity';
 import { Event } from '../events/entities/event.entity';
 import { Rsvp } from '../events/entities/rsvp.entity';
 import { Payment } from '../payments/entities/payment.entity';
@@ -39,6 +42,8 @@ export class UsersService {
     private readonly postsRepository: Repository<Post>,
     @InjectRepository(Reel)
     private readonly reelsRepository: Repository<Reel>,
+    @InjectRepository(Session)
+    private readonly sessionsRepository: Repository<Session>,
   ) {}
 
   async findById(id: string): Promise<User> {
@@ -79,6 +84,7 @@ export class UsersService {
           ) / 1000 AS distance_km
         FROM users u
         WHERE u.id <> $4
+          AND u.account_status = 'ACTIVE'
           AND u.home_location IS NOT NULL
           AND ST_DWithin(
             u.home_location,
@@ -219,6 +225,63 @@ export class UsersService {
     return {
       message: 'Account upgraded to business.',
       user: this.sanitizeUser(savedUser),
+    };
+  }
+
+  async deactivateAccount(userId: string, reactivateAtIso: string) {
+    const user = await this.findById(userId);
+    const reactivateAt = new Date(reactivateAtIso);
+
+    if (Number.isNaN(reactivateAt.getTime())) {
+      throw new BadRequestException('Provide a valid reactivation date and time.');
+    }
+
+    if (reactivateAt.getTime() <= Date.now()) {
+      throw new BadRequestException('Reactivation time must be in the future.');
+    }
+
+    user.accountStatus = AccountStatus.DEACTIVATED;
+    user.deactivatedUntil = reactivateAt;
+
+    await Promise.all([
+      this.usersRepository.save(user),
+      this.sessionsRepository.delete({ userId }),
+    ]);
+
+    return {
+      message: 'Account deactivated successfully.',
+      reactivateAt: reactivateAt.toISOString(),
+    };
+  }
+
+  async deleteAccountPermanently(userId: string) {
+    const user = await this.findById(userId);
+
+    user.accountStatus = AccountStatus.DELETED;
+    user.deactivatedUntil = null;
+    user.phoneNumber = this.buildDeletedPhonePlaceholder(user.id);
+    user.passwordHash = null;
+    user.email = null;
+    user.username = null;
+    user.displayName = 'Deleted User';
+    user.avatarUrl = null;
+    user.bio = null;
+    user.homeLocation = null;
+    user.township = null;
+    user.district = null;
+    user.region = null;
+    user.country = null;
+    user.isVerified = false;
+    user.lastActiveAt = new Date();
+
+    await Promise.all([
+      this.usersRepository.save(user),
+      this.sessionsRepository.delete({ userId }),
+    ]);
+
+    return {
+      message:
+        'Account deleted permanently. You can register again with your previous phone number.',
     };
   }
 
@@ -466,6 +529,16 @@ export class UsersService {
   private sanitizeUser(user: User) {
     const { passwordHash, ...safeUser } = user;
     return safeUser;
+  }
+
+  private buildDeletedPhonePlaceholder(userId: string) {
+    const epoch = Date.now().toString(36);
+    const suffix = userId.replace(/-/g, '').slice(0, 10);
+    const random = Math.floor(Math.random() * 1296)
+      .toString(36)
+      .padStart(2, '0');
+
+    return `del${epoch}${suffix}${random}`;
   }
 }
 

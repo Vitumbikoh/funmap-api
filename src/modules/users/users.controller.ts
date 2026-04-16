@@ -1,8 +1,18 @@
-import { Body, Controller, Get, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Patch,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { CurrentUser } from '../../shared/decorators/current-user.decorator';
 import { GeoQueryDto } from '../../shared/dto/geo-query.dto';
 import { JwtUser } from '../../shared/interfaces/jwt-user.interface';
 import { JwtAuthGuard } from '../../shared/guards/jwt-auth.guard';
+import { DeactivateAccountDto } from './dto/deactivate-account.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { UsersService } from './users.service';
 
@@ -52,5 +62,18 @@ export class UsersController {
   @Post('me/upgrade-business')
   upgradeMeToBusiness(@CurrentUser() user: JwtUser) {
     return this.usersService.upgradeToBusiness(user.sub);
+  }
+
+  @Post('me/deactivate')
+  deactivateMe(
+    @CurrentUser() user: JwtUser,
+    @Body() payload: DeactivateAccountDto,
+  ) {
+    return this.usersService.deactivateAccount(user.sub, payload.reactivateAt);
+  }
+
+  @Delete('me/account')
+  deleteMePermanently(@CurrentUser() user: JwtUser) {
+    return this.usersService.deleteAccountPermanently(user.sub);
   }
 }
