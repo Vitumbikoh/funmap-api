@@ -123,6 +123,15 @@ export class UsersService {
     const nextRegion = normalizeText(payload.region);
     const nextCountry = normalizeText(payload.country);
 
+    if (
+      payload.subscriptionPlan !== undefined &&
+      payload.subscriptionPlan !== user.subscriptionPlan
+    ) {
+      throw new BadRequestException(
+        'Subscription plan changes are managed by billing or admin workflows.',
+      );
+    }
+
     if (nextUsername && nextUsername !== user.username) {
       const existingByUsername = await this.usersRepository.findOne({
         where: {

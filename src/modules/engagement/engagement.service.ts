@@ -12,6 +12,7 @@ import { View } from '../../shared/database/entities/view.entity';
 import { PaginationQueryDto } from '../../shared/dto/pagination-query.dto';
 import { ContentTarget } from '../../shared/enums/content-target.enum';
 import { NotificationType } from '../../shared/enums/notification-type.enum';
+import { Role } from '../../shared/enums/role.enum';
 import { RsvpStatus } from '../../shared/enums/rsvp-status.enum';
 import { JwtUser } from '../../shared/interfaces/jwt-user.interface';
 import { Event } from '../events/entities/event.entity';
@@ -19,6 +20,7 @@ import { Rsvp } from '../events/entities/rsvp.entity';
 import { NotificationsService } from '../notifications/notifications.service';
 import { Post } from '../posts/entities/post.entity';
 import { Reel } from '../reels/entities/reel.entity';
+import { User } from '../users/entities/user.entity';
 import { AddCommentDto } from './dto/add-comment.dto';
 import { ReportViewDto } from './dto/report-view.dto';
 import { ShareTargetDto } from './dto/share-target.dto';
@@ -47,6 +49,8 @@ export class EngagementService {
     private readonly eventsRepository: Repository<Event>,
     @InjectRepository(Rsvp)
     private readonly rsvpRepository: Repository<Rsvp>,
+    @InjectRepository(User)
+    private readonly usersRepository: Repository<User>,
     private readonly notificationsService: NotificationsService,
   ) {}
 
@@ -136,23 +140,12 @@ export class EngagementService {
   ) {
     const targetMeta = await this.resolveTargetMeta(targetType, targetId);
 
-    if (targetType === ContentTarget.EVENT) {
-      const rsvp = await this.rsvpRepository.findOne({
-        where: {
-          eventId: targetId,
-          userId: user.sub,
-        },
-      });
-
-      const isUnlocked =
-        rsvp?.status === RsvpStatus.CONFIRMED || Boolean(rsvp?.paidAt);
-
-      if (!isUnlocked) {
-        throw new ForbiddenException(
-          'Comments unlock after RSVP or payment confirmation.',
-        );
-      }
-    }
+    await this.assertCommentUnlocked(
+      user.sub,
+      targetType,
+      targetId,
+      targetMeta.ownerUserId,
+    );
 
     const comment = this.commentsRepository.create({
       userId: user.sub,
@@ -176,7 +169,28 @@ export class EngagementService {
       },
     );
 
-    return saved;
+    const rows = (await this.commentsRepository.query(
+      `
+        SELECT
+          c.id,
+          c.user_id AS "userId",
+          c.target_type AS "targetType",
+          c.target_id AS "targetId",
+          c.body,
+          c.created_at AS "createdAt",
+          c.updated_at AS "updatedAt",
+          COALESCE(NULLIF(u.display_name, ''), NULLIF(u.business_name, ''), 'FunMap user') AS "authorName",
+          u.username AS "userName",
+          u.avatar_url AS "authorAvatarUrl"
+        FROM comments c
+        LEFT JOIN users u ON u.id = c.user_id
+        WHERE c.id = $1
+        LIMIT 1
+      `,
+      [saved.id],
+    )) as Array<Record<string, unknown>>;
+
+    return rows[0] ?? saved;
   }
 
   async listComments(
@@ -189,17 +203,42 @@ export class EngagementService {
     const page = query.page ?? 1;
     const limit = query.limit ?? 20;
 
-    const [items, total] = await this.commentsRepository.findAndCount({
-      where: {
-        targetType,
-        targetId,
-      },
-      order: {
-        createdAt: 'DESC',
-      },
-      skip: (page - 1) * limit,
-      take: limit,
-    });
+    const offset = (page - 1) * limit;
+
+    const items = (await this.commentsRepository.query(
+      `
+        SELECT
+          c.id,
+          c.user_id AS "userId",
+          c.target_type AS "targetType",
+          c.target_id AS "targetId",
+          c.body,
+          c.created_at AS "createdAt",
+          c.updated_at AS "updatedAt",
+          COALESCE(NULLIF(u.display_name, ''), NULLIF(u.business_name, ''), 'FunMap user') AS "authorName",
+          u.username AS "userName",
+          u.avatar_url AS "authorAvatarUrl"
+        FROM comments c
+        LEFT JOIN users u ON u.id = c.user_id
+        WHERE c.target_type::text = $1
+          AND c.target_id = $2
+        ORDER BY c.created_at DESC
+        LIMIT $3 OFFSET $4
+      `,
+      [targetType, targetId, limit, offset],
+    )) as Array<Record<string, unknown>>;
+
+    const totalResult = (await this.commentsRepository.query(
+      `
+        SELECT COUNT(*)::int AS total
+        FROM comments c
+        WHERE c.target_type::text = $1
+          AND c.target_id = $2
+      `,
+      [targetType, targetId],
+    )) as Array<{ total?: number }>;
+
+    const total = Number(totalResult[0]?.total ?? 0);
 
     return {
       items,
@@ -403,5 +442,76 @@ export class EngagementService {
         ...payload,
       },
     );
+  }
+
+  private async assertCommentUnlocked(
+    actorUserId: string,
+    targetType: ContentTarget,
+    targetId: string,
+    targetOwnerUserId: string,
+  ) {
+    if (actorUserId === targetOwnerUserId) {
+      return;
+    }
+
+    if (targetType === ContentTarget.EVENT) {
+      const rsvp = await this.rsvpRepository.findOne({
+        where: {
+          eventId: targetId,
+          userId: actorUserId,
+        },
+      });
+
+      const isUnlocked =
+        rsvp?.status === RsvpStatus.CONFIRMED || Boolean(rsvp?.paidAt);
+
+      if (!isUnlocked) {
+        throw new ForbiddenException(
+          'Comments unlock after RSVP or payment confirmation.',
+        );
+      }
+
+      return;
+    }
+
+    if (targetType !== ContentTarget.POST && targetType !== ContentTarget.REEL) {
+      return;
+    }
+
+    const owner = await this.usersRepository.findOne({
+      where: { id: targetOwnerUserId },
+      select: {
+        id: true,
+        roles: true,
+      },
+    });
+
+    const isCapitalContent =
+      owner?.roles?.includes(Role.CAPITAL_USER) ||
+      owner?.roles?.includes(Role.BUSINESS);
+
+    if (!isCapitalContent) {
+      return;
+    }
+
+    const unlockedCount = await this.rsvpRepository
+      .createQueryBuilder('r')
+      .innerJoin(
+        Event,
+        'e',
+        'e.id = r.event_id AND e.organizer_id = :ownerId',
+        { ownerId: targetOwnerUserId },
+      )
+      .where('r.user_id = :actorUserId', { actorUserId })
+      .andWhere('(r.status = :confirmedStatus OR r.paid_at IS NOT NULL)', {
+        confirmedStatus: RsvpStatus.CONFIRMED,
+      })
+      .getCount();
+
+    if (unlockedCount < 1) {
+      throw new ForbiddenException(
+        'Comments on capital user content unlock after confirmed RSVP or payment for their event.',
+      );
+    }
   }
 }

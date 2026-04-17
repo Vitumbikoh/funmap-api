@@ -4,6 +4,8 @@ import { Point } from 'geojson';
 import { Repository } from 'typeorm';
 import { GeoQueryDto } from '../../shared/dto/geo-query.dto';
 import { JwtUser } from '../../shared/interfaces/jwt-user.interface';
+import { enforceCoverageForBusiness } from '../../shared/services/coverage-policy.service';
+import { User } from '../users/entities/user.entity';
 import { CreatePostDto } from './dto/create-post.dto';
 import { UpdatePostDto } from './dto/update-post.dto';
 import { Post } from './entities/post.entity';
@@ -13,9 +15,28 @@ export class PostsService {
   constructor(
     @InjectRepository(Post)
     private readonly postsRepository: Repository<Post>,
+    @InjectRepository(User)
+    private readonly usersRepository: Repository<User>,
   ) {}
 
   async create(user: JwtUser, payload: CreatePostDto) {
+    const creator = await this.usersRepository.findOne({
+      where: { id: user.sub },
+      select: {
+        id: true,
+        subscriptionPlan: true,
+      },
+    });
+
+    if (creator) {
+      enforceCoverageForBusiness(user.roles, creator.subscriptionPlan, {
+        township: payload.township,
+        district: payload.district,
+        region: payload.region,
+        country: payload.country,
+      });
+    }
+
     const location =
       payload.latitude !== undefined && payload.longitude !== undefined
         ? ({
@@ -82,6 +103,22 @@ export class PostsService {
 
   async update(user: JwtUser, postId: string, payload: UpdatePostDto) {
     const post = await this.getOwnedPost(user.sub, postId);
+    const creator = await this.usersRepository.findOne({
+      where: { id: user.sub },
+      select: {
+        id: true,
+        subscriptionPlan: true,
+      },
+    });
+
+    if (creator) {
+      enforceCoverageForBusiness(user.roles, creator.subscriptionPlan, {
+        township: payload.township ?? post.township,
+        district: payload.district ?? post.district,
+        region: payload.region ?? post.region,
+        country: payload.country ?? post.country,
+      });
+    }
 
     if (payload.caption !== undefined) {
       post.caption = payload.caption;

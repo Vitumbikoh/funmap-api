@@ -1,6 +1,7 @@
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   IsArray,
+  IsEnum,
   IsInt,
   IsLatitude,
   IsLongitude,
@@ -11,6 +12,7 @@ import {
   MaxLength,
   Min,
 } from 'class-validator';
+import { MoodTag } from '../../../shared/enums/mood-tag.enum';
 
 export class CreateReelDto {
   @IsUUID()
@@ -51,7 +53,25 @@ export class CreateReelDto {
   hashtags?: string[];
 
   @IsOptional()
-  @IsString()
-  moodTag?: string;
+  @Transform(({ value }) => normalizeMoodTag(value))
+  @IsEnum(MoodTag)
+  moodTag?: MoodTag;
+}
+
+function normalizeMoodTag(value: unknown): MoodTag | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+
+  const normalized = value
+    .trim()
+    .toUpperCase()
+    .replaceAll('_', '-')
+    .replaceAll(' ', '-');
+  if (normalized == 'RNB') {
+    return MoodTag.RNB;
+  }
+
+  return normalized as MoodTag;
 }
 

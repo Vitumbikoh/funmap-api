@@ -10,12 +10,13 @@ import { Rsvp } from '../events/entities/rsvp.entity';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { Post } from '../posts/entities/post.entity';
 import { Reel } from '../reels/entities/reel.entity';
+import { User } from '../users/entities/user.entity';
 import { EngagementController } from './engagement.controller';
 import { EngagementService } from './engagement.service';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Like, Comment, Share, Post, Reel, Event, Rsvp]),
+    TypeOrmModule.forFeature([Like, Comment, Share, Post, Reel, Event, Rsvp, User]),
     TypeOrmModule.forFeature([View]),
     NotificationsModule,
     EventsModule,

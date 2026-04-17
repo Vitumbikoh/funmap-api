@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -7,14 +8,17 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Point } from 'geojson';
 import { Repository } from 'typeorm';
 import { EventLifecycleStatus } from '../../shared/enums/event-lifecycle-status.enum';
+import { EventCategory } from '../../shared/enums/event-category.enum';
 import { Role } from '../../shared/enums/role.enum';
 import { RsvpStatus } from '../../shared/enums/rsvp-status.enum';
 import { JwtUser } from '../../shared/interfaces/jwt-user.interface';
+import { enforceCoverageForBusiness } from '../../shared/services/coverage-policy.service';
 import { CreateEventDto } from './dto/create-event.dto';
 import { NearbyEventsQueryDto } from './dto/nearby-events-query.dto';
 import { UpdateEventDto } from './dto/update-event.dto';
 import { Event } from './entities/event.entity';
 import { Rsvp } from './entities/rsvp.entity';
+import { User } from '../users/entities/user.entity';
 
 type EventListItem = Record<string, unknown>;
 type AttendeeItem = Record<string, unknown>;
@@ -26,6 +30,8 @@ export class EventsService {
     private readonly eventsRepository: Repository<Event>,
     @InjectRepository(Rsvp)
     private readonly rsvpRepository: Repository<Rsvp>,
+    @InjectRepository(User)
+    private readonly usersRepository: Repository<User>,
   ) {}
 
   async create(user: JwtUser, payload: CreateEventDto) {
@@ -35,6 +41,23 @@ export class EventsService {
 
     if (!canCreateEvent) {
       throw new ForbiddenException('Only business accounts can add events.');
+    }
+
+    const creator = await this.usersRepository.findOne({
+      where: { id: user.sub },
+      select: {
+        id: true,
+        subscriptionPlan: true,
+      },
+    });
+
+    if (creator) {
+      enforceCoverageForBusiness(user.roles, creator.subscriptionPlan, {
+        township: payload.township,
+        district: payload.district,
+        region: payload.region,
+        country: payload.country,
+      });
     }
 
     const startDate = new Date(payload.startDate);
@@ -55,6 +78,7 @@ export class EventsService {
       paymentRequired: payload.paymentRequired,
       paymentLink: payload.paymentLink,
       status: payload.status ?? this.deriveStatus(startDate, endDate),
+      isPublished: payload.category !== EventCategory.COMMUNITY,
       location: {
         type: 'Point',
         coordinates: [payload.longitude, payload.latitude],
@@ -332,6 +356,22 @@ export class EventsService {
 
   async update(user: JwtUser, eventId: string, payload: UpdateEventDto) {
     const event = await this.getOwnedEvent(user.sub, eventId);
+    const creator = await this.usersRepository.findOne({
+      where: { id: user.sub },
+      select: {
+        id: true,
+        subscriptionPlan: true,
+      },
+    });
+
+    if (creator) {
+      enforceCoverageForBusiness(user.roles, creator.subscriptionPlan, {
+        township: payload.township ?? event.township,
+        district: payload.district ?? event.district,
+        region: payload.region ?? event.region,
+        country: payload.country ?? event.country,
+      });
+    }
 
     if (payload.title !== undefined) {
       event.title = payload.title;
@@ -355,6 +395,10 @@ export class EventsService {
 
     if (payload.category !== undefined) {
       event.category = payload.category;
+
+      if (payload.category === EventCategory.COMMUNITY) {
+        event.isPublished = false;
+      }
     }
 
     if (payload.moodTag !== undefined) {
@@ -415,7 +459,36 @@ export class EventsService {
       event.status = this.deriveStatus(event.startDate, event.endDate);
     }
 
+    if (event.category === EventCategory.COMMUNITY && event.isPublished) {
+      event.isPublished = false;
+    }
+
     return this.eventsRepository.save(event);
+  }
+
+  async reviewCommunityEvent(eventId: string, approved: boolean) {
+    const event = await this.findOne(eventId);
+
+    if (event.category !== EventCategory.COMMUNITY) {
+      throw new BadRequestException('Only COMMUNITY events require review.');
+    }
+
+    if (approved) {
+      event.isPublished = true;
+      event.status = this.deriveStatus(event.startDate, event.endDate);
+    } else {
+      event.isPublished = false;
+      event.status = EventLifecycleStatus.CANCELLED;
+    }
+
+    const saved = await this.eventsRepository.save(event);
+
+    return {
+      id: saved.id,
+      approved,
+      isPublished: saved.isPublished,
+      status: saved.status,
+    };
   }
 
   async cancel(user: JwtUser, eventId: string) {

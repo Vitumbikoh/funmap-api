@@ -1,4 +1,4 @@
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   IsArray,
@@ -12,6 +12,7 @@ import {
   Min,
 } from 'class-validator';
 import { ContentVisibility } from '../../../shared/enums/content-visibility.enum';
+import { MoodTag } from '../../../shared/enums/mood-tag.enum';
 
 export class CreatePostDto {
   @IsOptional()
@@ -49,8 +50,9 @@ export class CreatePostDto {
   hashtags?: string[];
 
   @IsOptional()
-  @IsString()
-  moodTag?: string;
+  @Transform(({ value }) => normalizeMoodTag(value))
+  @IsEnum(MoodTag)
+  moodTag?: MoodTag;
 
   @IsOptional()
   @IsString()
@@ -67,5 +69,22 @@ export class CreatePostDto {
   @IsOptional()
   @IsString()
   country?: string;
+}
+
+function normalizeMoodTag(value: unknown): MoodTag | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+
+  const normalized = value
+    .trim()
+    .toUpperCase()
+    .replaceAll('_', '-')
+    .replaceAll(' ', '-');
+  if (normalized == 'RNB') {
+    return MoodTag.RNB;
+  }
+
+  return normalized as MoodTag;
 }
 

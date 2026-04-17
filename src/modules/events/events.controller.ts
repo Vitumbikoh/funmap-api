@@ -11,8 +11,12 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { CurrentUser } from '../../shared/decorators/current-user.decorator';
+import { Roles } from '../../shared/decorators/roles.decorator';
+import { Role } from '../../shared/enums/role.enum';
 import { JwtAuthGuard } from '../../shared/guards/jwt-auth.guard';
+import { RolesGuard } from '../../shared/guards/roles.guard';
 import { JwtUser } from '../../shared/interfaces/jwt-user.interface';
+import { ApproveCommunityEventDto } from './dto/approve-community-event.dto';
 import { CreateEventDto } from './dto/create-event.dto';
 import { NearbyEventsQueryDto } from './dto/nearby-events-query.dto';
 import { UpdateEventDto } from './dto/update-event.dto';
@@ -67,6 +71,16 @@ export class EventsController {
     @Body() payload: UpdateEventDto,
   ) {
     return this.eventsService.update(user, id, payload);
+  }
+
+  @Patch(':id/community-review')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN)
+  reviewCommunityEvent(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() payload: ApproveCommunityEventDto,
+  ) {
+    return this.eventsService.reviewCommunityEvent(id, payload.approved);
   }
 
   @Delete(':id')

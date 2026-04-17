@@ -5,13 +5,16 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
+import { PaymentStatus } from '../../shared/enums/payment-status.enum';
 import { JwtUser } from '../../shared/interfaces/jwt-user.interface';
 import { Event } from '../events/entities/event.entity';
+import { Payment } from '../payments/entities/payment.entity';
 import { Post } from '../posts/entities/post.entity';
 import { Reel } from '../reels/entities/reel.entity';
 import { User } from '../users/entities/user.entity';
 import { BulkResolveReportsDto } from './dto/bulk-resolve-reports.dto';
 import { CreateReportDto } from './dto/create-report.dto';
+import { ListFraudSignalsQueryDto } from './dto/list-fraud-signals-query.dto';
 import { ListReportsQueryDto } from './dto/list-reports-query.dto';
 import { ResolveReportDto } from './dto/resolve-report.dto';
 import { Report } from './entities/report.entity';
@@ -31,6 +34,8 @@ export class ModerationService {
     private readonly eventsRepository: Repository<Event>,
     @InjectRepository(User)
     private readonly usersRepository: Repository<User>,
+    @InjectRepository(Payment)
+    private readonly paymentsRepository: Repository<Payment>,
   ) {}
 
   async createReport(user: JwtUser, payload: CreateReportDto) {
@@ -247,6 +252,89 @@ export class ModerationService {
       updated: result.affected ?? 0,
       skipped: skippedIds.length,
       skippedIds,
+    };
+  }
+
+  async getFraudSignals(query: ListFraudSignalsQueryDto) {
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 20;
+    const minRiskScore = query.minRiskScore ?? 1;
+    const offset = (page - 1) * limit;
+
+    const rows = await this.usersRepository.query(
+      `
+        SELECT
+          u.id,
+          u.display_name AS "displayName",
+          u.username,
+          u.phone_number AS "phoneNumber",
+          u.account_status AS "accountStatus",
+          u.national_id_status AS "nationalIdStatus",
+          COALESCE(report_stats.open_count, 0)::int AS "openReports",
+          COALESCE(report_stats.resolved_count, 0)::int AS "resolvedReports",
+          COALESCE(report_stats.dismissed_count, 0)::int AS "dismissedReports",
+          COALESCE(payment_stats.failed_count, 0)::int AS "failedPayments",
+          (
+            COALESCE(report_stats.open_count, 0) * 25
+            + COALESCE(report_stats.resolved_count, 0) * 8
+            + COALESCE(payment_stats.failed_count, 0) * 12
+            + CASE WHEN u.national_id_status = 'REJECTED' THEN 35
+                   WHEN u.national_id_status IN ('PENDING', 'NOT_SUBMITTED') THEN 10
+                   ELSE 0 END
+            + CASE WHEN u.account_status <> 'ACTIVE' THEN 10 ELSE 0 END
+          )::int AS "riskScore",
+          COUNT(*) OVER()::int AS "totalCount"
+        FROM users u
+        LEFT JOIN LATERAL (
+          SELECT
+            COUNT(*) FILTER (WHERE r.status = 'OPEN') AS open_count,
+            COUNT(*) FILTER (WHERE r.status = 'RESOLVED') AS resolved_count,
+            COUNT(*) FILTER (WHERE r.status = 'DISMISSED') AS dismissed_count
+          FROM reports r
+          WHERE r.target_type = 'USER'
+            AND r.target_id = u.id
+        ) report_stats ON TRUE
+        LEFT JOIN LATERAL (
+          SELECT COUNT(*) AS failed_count
+          FROM payments p
+          WHERE p.user_id = u.id
+            AND p.status = $1
+        ) payment_stats ON TRUE
+        WHERE (
+          COALESCE(report_stats.open_count, 0) * 25
+          + COALESCE(report_stats.resolved_count, 0) * 8
+          + COALESCE(payment_stats.failed_count, 0) * 12
+          + CASE WHEN u.national_id_status = 'REJECTED' THEN 35
+                 WHEN u.national_id_status IN ('PENDING', 'NOT_SUBMITTED') THEN 10
+                 ELSE 0 END
+          + CASE WHEN u.account_status <> 'ACTIVE' THEN 10 ELSE 0 END
+        ) >= $2
+        ORDER BY "riskScore" DESC, "openReports" DESC, u.created_at DESC
+        LIMIT $3 OFFSET $4
+      `,
+      [PaymentStatus.FAILED, minRiskScore, limit, offset],
+    );
+
+    const total = Number(rows?.[0]?.totalCount ?? 0);
+
+    return {
+      items: rows.map((item: Record<string, unknown>) => ({
+        id: item.id,
+        displayName: item.displayName,
+        username: item.username,
+        phoneNumber: item.phoneNumber,
+        accountStatus: item.accountStatus,
+        nationalIdStatus: item.nationalIdStatus,
+        openReports: Number(item.openReports ?? 0),
+        resolvedReports: Number(item.resolvedReports ?? 0),
+        dismissedReports: Number(item.dismissedReports ?? 0),
+        failedPayments: Number(item.failedPayments ?? 0),
+        riskScore: Number(item.riskScore ?? 0),
+      })),
+      page,
+      limit,
+      total,
+      minRiskScore,
     };
   }
 

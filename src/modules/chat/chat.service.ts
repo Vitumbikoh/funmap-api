@@ -9,7 +9,9 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Not, Repository } from 'typeorm';
 import { ChatRoomType } from '../../shared/enums/chat-room-type.enum';
 import { NotificationType } from '../../shared/enums/notification-type.enum';
+import { Role } from '../../shared/enums/role.enum';
 import { RsvpStatus } from '../../shared/enums/rsvp-status.enum';
+import { SubscriptionPlan } from '../../shared/enums/subscription-plan.enum';
 import { JwtUser } from '../../shared/interfaces/jwt-user.interface';
 import { Rsvp } from '../events/entities/rsvp.entity';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -54,6 +56,8 @@ export class ChatService {
     if (!recipient) {
       throw new NotFoundException('Recipient user not found');
     }
+
+    await this.assertSharedUnlockedEvent(user.sub, otherUserId);
 
     const existingRoom = await this.findExistingPrivateRoom(user.sub, otherUserId);
     if (existingRoom) {
@@ -192,6 +196,8 @@ export class ChatService {
       throw new ConflictException('Chat request has already been handled');
     }
 
+    await this.assertSharedUnlockedEvent(user.sub, request.requesterId);
+
     request.respondedAt = new Date();
 
     if (action === 'decline') {
@@ -229,6 +235,7 @@ export class ChatService {
   }
 
   async createPrivateRoom(user: JwtUser, payload: CreatePrivateRoomDto) {
+    await this.assertSharedUnlockedEvent(user.sub, payload.otherUserId);
     return this.findOrCreatePrivateRoom(user.sub, payload.otherUserId);
   }
 
@@ -614,6 +621,8 @@ export class ChatService {
       throw new BadRequestException('Cannot create private room with yourself');
     }
 
+    await this.assertSharedUnlockedEvent(currentUserId, otherUserId);
+
     const existingRoom = await this.findExistingPrivateRoom(currentUserId, otherUserId);
     if (existingRoom) {
       return existingRoom;
@@ -637,6 +646,71 @@ export class ChatService {
     ]);
 
     return savedRoom;
+  }
+
+  private async assertSharedUnlockedEvent(firstUserId: string, secondUserId: string) {
+    const dmUnlockedByPaidTier = await this.isPremiumDmUnlocked(
+      firstUserId,
+      secondUserId,
+    );
+
+    if (dmUnlockedByPaidTier) {
+      return;
+    }
+
+    const sharedUnlockedRsvps = await this.rsvpRepository
+      .createQueryBuilder('first')
+      .innerJoin(
+        Rsvp,
+        'second',
+        'second.event_id = first.event_id AND second.user_id = :secondUserId',
+        { secondUserId },
+      )
+      .where('first.user_id = :firstUserId', { firstUserId })
+      .andWhere('(first.status = :confirmedStatus OR first.paid_at IS NOT NULL)', {
+        confirmedStatus: RsvpStatus.CONFIRMED,
+      })
+      .andWhere('(second.status = :confirmedStatus OR second.paid_at IS NOT NULL)', {
+        confirmedStatus: RsvpStatus.CONFIRMED,
+      })
+      .getCount();
+
+    if (sharedUnlockedRsvps < 1) {
+      throw new ForbiddenException(
+        'Private messaging unlocks only with a paid DM tier or when both users have confirmed or paid attendance for at least one shared event.',
+      );
+    }
+  }
+
+  private async isPremiumDmUnlocked(firstUserId: string, secondUserId: string) {
+    const users = await this.usersRepository.find({
+      where: [{ id: firstUserId }, { id: secondUserId }],
+      select: {
+        id: true,
+        roles: true,
+        subscriptionPlan: true,
+      },
+    });
+
+    return users.some((user) => this.hasPremiumMessagingAccess(user));
+  }
+
+  private hasPremiumMessagingAccess(
+    user: Pick<User, 'roles' | 'subscriptionPlan'>,
+  ) {
+    const isBusinessOrAdmin =
+      user.roles.includes(Role.BUSINESS) ||
+      user.roles.includes(Role.CAPITAL_USER) ||
+      user.roles.includes(Role.ADMIN);
+
+    if (isBusinessOrAdmin) {
+      return false;
+    }
+
+    return (
+      user.roles.includes(Role.CLIENT) &&
+      user.subscriptionPlan !== SubscriptionPlan.LITE
+    );
   }
 }
 

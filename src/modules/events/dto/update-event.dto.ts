@@ -16,6 +16,7 @@ import {
 } from 'class-validator';
 import { EventCategory } from '../../../shared/enums/event-category.enum';
 import { EventLifecycleStatus } from '../../../shared/enums/event-lifecycle-status.enum';
+import { MoodTag } from '../../../shared/enums/mood-tag.enum';
 
 export class UpdateEventDto {
   @IsOptional()
@@ -48,9 +49,9 @@ export class UpdateEventDto {
   category?: EventCategory;
 
   @IsOptional()
-  @Transform(({ value }) => normalizeText(value))
-  @IsString()
-  moodTag?: string;
+  @Transform(({ value }) => normalizeMoodTag(value))
+  @IsEnum(MoodTag)
+  moodTag?: MoodTag;
 
   @IsOptional()
   @IsArray()
@@ -131,4 +132,21 @@ function normalizeText(value: unknown): string | undefined {
 
   const trimmed = value.trim();
   return trimmed.length ? trimmed : undefined;
+}
+
+function normalizeMoodTag(value: unknown): MoodTag | undefined {
+  const normalized = normalizeText(value)
+    ?.toUpperCase()
+    .replaceAll('_', '-')
+    .replaceAll(' ', '-');
+
+  if (!normalized) {
+    return undefined;
+  }
+
+  if (normalized === 'RNB') {
+    return MoodTag.RNB;
+  }
+
+  return normalized as MoodTag;
 }

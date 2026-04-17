@@ -17,6 +17,7 @@ import { RolesGuard } from '../../shared/guards/roles.guard';
 import { JwtUser } from '../../shared/interfaces/jwt-user.interface';
 import { CreateReportDto } from './dto/create-report.dto';
 import { BulkResolveReportsDto } from './dto/bulk-resolve-reports.dto';
+import { ListFraudSignalsQueryDto } from './dto/list-fraud-signals-query.dto';
 import { ListReportsQueryDto } from './dto/list-reports-query.dto';
 import { ResolveReportDto } from './dto/resolve-report.dto';
 import { ModerationService } from './moderation.service';
@@ -48,6 +49,13 @@ export class ModerationController {
   @Roles(Role.ADMIN)
   getSummary() {
     return this.moderationService.getSummary();
+  }
+
+  @Get('fraud-signals')
+  @UseGuards(RolesGuard)
+  @Roles(Role.ADMIN)
+  getFraudSignals(@Query() query: ListFraudSignalsQueryDto) {
+    return this.moderationService.getFraudSignals(query);
   }
 
   @Patch('reports/:id/resolve')
