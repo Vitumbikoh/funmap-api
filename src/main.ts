@@ -7,6 +7,7 @@ import { AppConfigService } from './shared/config/app-config.service';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
     cors: true,
+    rawBody: true,
   });
 
   const config = app.get(AppConfigService);

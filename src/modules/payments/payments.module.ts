@@ -3,6 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { Event } from '../events/entities/event.entity';
 import { Rsvp } from '../events/entities/rsvp.entity';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { User } from '../users/entities/user.entity';
 import { Payment } from './entities/payment.entity';
 import { PaymentsController } from './payments.controller';
 import { PaymentsService } from './payments.service';
@@ -10,7 +11,7 @@ import { Transaction } from './entities/transaction.entity';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Event, Rsvp, Payment, Transaction]),
+    TypeOrmModule.forFeature([Event, Rsvp, Payment, Transaction, User]),
     NotificationsModule,
   ],
   controllers: [PaymentsController],

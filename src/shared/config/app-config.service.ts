@@ -54,6 +54,17 @@ export class AppConfigService {
       baseUrl: this.configService.get<string>('paychangu.baseUrl', 'https://api.paychangu.com'),
       secretKey: this.configService.get<string>('paychangu.secretKey', ''),
       webhookSecret: this.configService.get<string>('paychangu.webhookSecret', ''),
+      webhookSignatureHeader: this.configService.get<string>(
+        'paychangu.webhookSignatureHeader',
+        'signature',
+      ),
+      paymentPath: this.configService.get<string>('paychangu.paymentPath', '/payment'),
+      verifyPath: this.configService.get<string>(
+        'paychangu.verifyPath',
+        '/verify-payment/{tx_ref}',
+      ),
+      callbackUrl: this.configService.get<string>('paychangu.callbackUrl', ''),
+      returnUrl: this.configService.get<string>('paychangu.returnUrl', ''),
     };
   }
 

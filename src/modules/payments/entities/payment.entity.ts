@@ -29,8 +29,17 @@ export class Payment extends BaseEntity {
   @Column({ type: 'varchar', length: 60, default: 'PAYCHANGU' })
   provider: string;
 
-  @Column({ name: 'provider_reference', type: 'varchar', length: 120, unique: true })
-  providerReference: string;
+  @Column({ type: 'varchar', length: 120, unique: true, nullable: true })
+  reference?: string | null;
+
+  @Column({
+    name: 'provider_reference',
+    type: 'varchar',
+    length: 120,
+    unique: true,
+    nullable: true,
+  })
+  providerReference?: string | null;
 
   @Column({ name: 'checkout_url', type: 'text', nullable: true })
   checkoutUrl?: string | null;

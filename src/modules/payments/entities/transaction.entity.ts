@@ -14,8 +14,20 @@ export class Transaction extends BaseEntity {
   @Column({ name: 'webhook_event', type: 'varchar', length: 120 })
   webhookEvent: string;
 
+  @Column({ name: 'tx_ref', type: 'varchar', length: 120, nullable: true })
+  txRef?: string | null;
+
+  @Column({ type: 'varchar', length: 120, nullable: true })
+  reference?: string | null;
+
+  @Column({ name: 'idempotency_key', type: 'varchar', length: 200, unique: true })
+  idempotencyKey: string;
+
   @Column({ type: 'jsonb' })
   payload: Record<string, unknown>;
+
+  @Column({ name: 'verification_payload', type: 'jsonb', nullable: true })
+  verificationPayload?: Record<string, unknown> | null;
 
   @Column({ type: 'varchar', length: 255, nullable: true })
   signature?: string | null;
