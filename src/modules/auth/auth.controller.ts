@@ -1,6 +1,7 @@
-import { Body, Controller, Post } from '@nestjs/common';
+import { Body, Controller, Post, UseGuards } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { CredentialLoginDto } from './dto/credential-login.dto';
+import { LogoutDto } from './dto/logout.dto';
 import { RegisterBusinessRequestOtpDto } from './dto/register-business-request-otp.dto';
 import { RegisterAdminDto } from './dto/register-admin.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
@@ -8,6 +9,9 @@ import { RegisterRequestOtpDto } from './dto/register-request-otp.dto';
 import { RequestOtpDto } from './dto/request-otp.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { VerifyRegistrationOtpDto } from './dto/verify-registration-otp.dto';
+import { CurrentUser } from '../../shared/decorators/current-user.decorator';
+import { JwtAuthGuard } from '../../shared/guards/jwt-auth.guard';
+import { JwtUser } from '../../shared/interfaces/jwt-user.interface';
 
 @Controller('auth')
 export class AuthController {
@@ -56,6 +60,12 @@ export class AuthController {
   @Post('refresh')
   refresh(@Body() payload: RefreshTokenDto) {
     return this.authService.refreshAccessToken(payload.refreshToken);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('logout')
+  logout(@CurrentUser() user: JwtUser, @Body() payload: LogoutDto) {
+    return this.authService.logout(user.sub, payload.refreshToken);
   }
 }
 

@@ -21,7 +21,7 @@ export const appConfig = () => {
     jwt: {
       accessSecret: process.env.JWT_ACCESS_SECRET ?? 'change-me-access',
       refreshSecret: process.env.JWT_REFRESH_SECRET ?? 'change-me-refresh',
-      accessTtl: process.env.JWT_ACCESS_TTL ?? '15m',
+      accessTtl: process.env.JWT_ACCESS_TTL ?? '1h',
       refreshTtl: process.env.JWT_REFRESH_TTL ?? '30d',
     },
     database: {

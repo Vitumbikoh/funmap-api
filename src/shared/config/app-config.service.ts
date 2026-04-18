@@ -31,7 +31,7 @@ export class AppConfigService {
   }
 
   get jwtAccessTtl(): StringValue {
-    return this.configService.get<StringValue>('jwt.accessTtl', '15m');
+    return this.configService.get<StringValue>('jwt.accessTtl', '1h');
   }
 
   get jwtRefreshTtl(): StringValue {

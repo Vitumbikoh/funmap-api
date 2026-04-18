@@ -342,6 +342,30 @@ export class AuthService {
     return { accessToken };
   }
 
+  async logout(userId: string, refreshToken: string) {
+    const decoded = await this.jwtService.verifyAsync<JwtUser & { sid: string }>(
+      refreshToken,
+      {
+        secret: this.configService.jwtRefreshSecret,
+      },
+    );
+
+    if (decoded.sub !== userId) {
+      throw new UnauthorizedException('Refresh token does not belong to user');
+    }
+
+    const deleted = await this.sessionsRepository.delete({
+      id: decoded.sid,
+      userId,
+    });
+
+    if (!deleted.affected) {
+      throw new UnauthorizedException('Session not found');
+    }
+
+    return { message: 'Logged out successfully' };
+  }
+
   private async createSession(user: User, deviceId?: string) {
     const session = this.sessionsRepository.create({
       userId: user.id,
