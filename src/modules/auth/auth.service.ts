@@ -21,6 +21,7 @@ import { RegisterBusinessRequestOtpDto } from './dto/register-business-request-o
 import { RegisterAdminDto } from './dto/register-admin.dto';
 import { RegisterRequestOtpDto } from './dto/register-request-otp.dto';
 import { RequestOtpDto } from './dto/request-otp.dto';
+import { ResetPasswordWithOtpDto } from './dto/reset-password-with-otp.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { VerifyRegistrationOtpDto } from './dto/verify-registration-otp.dto';
 import { OtpCode } from './entities/otp-code.entity';
@@ -268,6 +269,51 @@ export class AuthService {
       expiresAt: otpPayload.expiresAt,
       debugCode: otpPayload.debugCode,
     };
+  }
+
+  async requestPasswordResetOtp(payload: RequestOtpDto) {
+    const normalizedPhoneNumber = this.normalizePhoneNumber(payload.phoneNumber);
+    const user = await this.findUserByPhoneNumber(normalizedPhoneNumber);
+
+    if (!user) {
+      throw new BadRequestException('No account found for this phone number.');
+    }
+
+    await this.ensureAccountCanAuthenticate(user);
+
+    const otpPayload = await this.issueOtp(normalizedPhoneNumber, 'PASSWORD_RESET');
+
+    return {
+      message: 'Password reset OTP created',
+      phoneNumber: payload.phoneNumber,
+      expiresAt: otpPayload.expiresAt,
+      debugCode: otpPayload.debugCode,
+    };
+  }
+
+  async resetPasswordWithOtp(payload: ResetPasswordWithOtpDto) {
+    const normalizedPhoneNumber = this.normalizePhoneNumber(payload.phoneNumber);
+
+    await this.validateOtp({
+      phoneNumber: normalizedPhoneNumber,
+      code: payload.code,
+      purpose: 'PASSWORD_RESET',
+    });
+
+    const user = await this.findUserByPhoneNumber(normalizedPhoneNumber);
+
+    if (!user) {
+      throw new BadRequestException('No account found for this phone number.');
+    }
+
+    const eligibleUser = await this.ensureAccountCanAuthenticate(user);
+    eligibleUser.passwordHash = await bcrypt.hash(payload.newPassword, 10);
+    eligibleUser.isVerified = true;
+    eligibleUser.lastActiveAt = new Date();
+
+    await this.usersRepository.save(eligibleUser);
+
+    return { message: 'Password reset successful.' };
   }
 
   async verifyOtp(payload: VerifyOtpDto) {
