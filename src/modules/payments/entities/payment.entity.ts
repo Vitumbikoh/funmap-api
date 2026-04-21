@@ -13,12 +13,12 @@ export class Payment extends BaseEntity {
   @Column({ name: 'user_id', type: 'uuid' })
   userId: string;
 
-  @ManyToOne(() => Event, { nullable: false })
+  @ManyToOne(() => Event, { nullable: true })
   @JoinColumn({ name: 'event_id' })
-  event: Event;
+  event?: Event | null;
 
-  @Column({ name: 'event_id', type: 'uuid' })
-  eventId: string;
+  @Column({ name: 'event_id', type: 'uuid', nullable: true })
+  eventId?: string | null;
 
   @Column({ type: 'numeric', precision: 12, scale: 2 })
   amount: string;

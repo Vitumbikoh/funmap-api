@@ -79,6 +79,13 @@ export class PaymentsController {
     );
   }
 
+  @Get('admin/ledger')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN)
+  listAdminPaymentLedger(@Query('limit') limit?: string) {
+    return this.paymentsService.listAdminPaymentLedger(limit ? Number(limit) : 50);
+  }
+
   @Post('event-checkout')
   @UseGuards(JwtAuthGuard)
   initiateEventPayment(

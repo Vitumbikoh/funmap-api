@@ -798,6 +798,11 @@ export class UsersService {
         provider: item.provider,
         providerReference: item.providerReference,
         eventTitle: item.event?.title,
+        sourceType: normalizeText(item.metadata?.type as string | null | undefined) ?? (item.eventId ? 'event' : 'subscription'),
+        label:
+          normalizeText(item.metadata?.type as string | null | undefined) === 'subscription'
+            ? `${normalizeText(item.metadata?.audience as string | null | undefined) ?? 'Subscription'} ${normalizeText(item.metadata?.plan as string | null | undefined) ?? 'plan'}`
+            : item.event?.title ?? 'Transaction',
         createdAt: item.createdAt,
       }));
 
@@ -859,6 +864,11 @@ export class UsersService {
         currency: item.currency,
         status: item.status,
         eventTitle: item.event?.title,
+        sourceType: normalizeText(item.metadata?.type as string | null | undefined) ?? (item.eventId ? 'event' : 'subscription'),
+        label:
+          normalizeText(item.metadata?.type as string | null | undefined) === 'subscription'
+            ? `${normalizeText(item.metadata?.audience as string | null | undefined) ?? 'Subscription'} ${normalizeText(item.metadata?.plan as string | null | undefined) ?? 'plan'}`
+            : item.event?.title ?? 'Transaction',
         createdAt: item.createdAt,
       })),
       bookingSummary: {

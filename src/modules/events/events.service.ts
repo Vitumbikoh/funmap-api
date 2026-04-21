@@ -2,7 +2,10 @@ import {
   BadRequestException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
+  OnModuleDestroy,
+  OnModuleInit,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Point } from 'geojson';
@@ -24,7 +27,10 @@ type EventListItem = Record<string, unknown>;
 type AttendeeItem = Record<string, unknown>;
 
 @Injectable()
-export class EventsService {
+export class EventsService implements OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger(EventsService.name);
+  private completedEventSyncTimer?: NodeJS.Timeout;
+
   constructor(
     @InjectRepository(Event)
     private readonly eventsRepository: Repository<Event>,
@@ -33,6 +39,25 @@ export class EventsService {
     @InjectRepository(User)
     private readonly usersRepository: Repository<User>,
   ) {}
+
+  onModuleInit() {
+    this.syncCompletedEvents().catch(() => {
+      // Keep startup resilient if the first sync hits a transient database issue.
+    });
+
+    this.completedEventSyncTimer = setInterval(() => {
+      this.syncCompletedEvents().catch(() => {
+        // Keep the scheduler resilient to transient issues.
+      });
+    }, 15 * 60 * 1000);
+  }
+
+  onModuleDestroy() {
+    if (this.completedEventSyncTimer) {
+      clearInterval(this.completedEventSyncTimer);
+      this.completedEventSyncTimer = undefined;
+    }
+  }
 
   async create(user: JwtUser, payload: CreateEventDto) {
     const canCreateEvent =
@@ -581,6 +606,23 @@ export class EventsService {
     return (tags ?? [])
       .map((item) => item.trim())
       .filter((item) => item.length > 0);
+  }
+
+  private async syncCompletedEvents() {
+    const now = new Date();
+    const result = await this.eventsRepository
+      .createQueryBuilder()
+      .update(Event)
+      .set({ status: EventLifecycleStatus.COMPLETED })
+      .where('end_date < :now', { now })
+      .andWhere('status NOT IN (:...statuses)', {
+        statuses: [EventLifecycleStatus.COMPLETED, EventLifecycleStatus.CANCELLED],
+      })
+      .execute();
+
+    if ((result.affected ?? 0) > 0) {
+      this.logger.log(`Marked ${result.affected} expired event(s) as completed.`);
+    }
   }
 }
 

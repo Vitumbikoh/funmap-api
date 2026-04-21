@@ -270,6 +270,69 @@ export class PaymentsService {
     };
   }
 
+  async listAdminPaymentLedger(limit = 50) {
+    const safeLimit = Math.max(1, Math.min(100, Number(limit) || 50));
+
+    const items = await this.paymentsRepository
+      .createQueryBuilder('payment')
+      .leftJoin('payment.user', 'user')
+      .leftJoin('payment.event', 'event')
+      .select('payment.id', 'id')
+      .addSelect('payment.amount', 'amount')
+      .addSelect('payment.currency', 'currency')
+      .addSelect('payment.status', 'status')
+      .addSelect('payment.provider', 'provider')
+      .addSelect('payment.reference', 'reference')
+      .addSelect('payment.providerReference', 'providerReference')
+      .addSelect('payment.createdAt', 'createdAt')
+      .addSelect('payment.metadata', 'metadata')
+      .addSelect('user.id', 'userId')
+      .addSelect('user.displayName', 'displayName')
+      .addSelect('user.username', 'username')
+      .addSelect('user.phoneNumber', 'phoneNumber')
+      .addSelect('user.roles', 'roles')
+      .addSelect('event.title', 'eventTitle')
+      .where('payment.status = :status', { status: PaymentStatus.SUCCESS })
+      .orderBy('payment.createdAt', 'DESC')
+      .limit(safeLimit)
+      .getRawMany<Record<string, unknown>>();
+
+    return {
+      items: items.map((item) => {
+        const metadata = this.toRecord(item.metadata);
+        const sourceType = this.asString(metadata.type) ?? (item.eventTitle ? 'event' : 'subscription');
+        const plan = this.asString(metadata.plan);
+        const audience = this.asString(metadata.audience);
+
+        return {
+          id: item.id,
+          amount: item.amount,
+          currency: item.currency,
+          status: item.status,
+          provider: item.provider,
+          reference: item.reference,
+          providerReference: item.providerReference,
+          createdAt: item.createdAt,
+          sourceType,
+          sourceLabel:
+            sourceType === 'subscription'
+              ? `${audience ?? 'Subscription'} ${plan ?? 'plan'}`
+              : (item.eventTitle?.toString() ?? 'Event payment'),
+          payer: {
+            id: item.userId,
+            displayName: item.displayName,
+            username: item.username,
+            phoneNumber: item.phoneNumber,
+          },
+          eventTitle: item.eventTitle,
+          plan,
+          audience,
+        };
+      }),
+      total: items.length,
+    };
+  }
+
   async initiateSubscriptionCheckout(
     user: JwtUser,
     payload: InitiateSubscriptionPaymentDto,
@@ -351,6 +414,7 @@ export class PaymentsService {
       metadata: {
         eventTitle: event.title,
         provider: 'PayChangu',
+        type: 'event',
         payChanguStatus: checkoutSession.status,
       },
     });
@@ -435,6 +499,55 @@ export class PaymentsService {
         });
       }
 
+      const subscriptionActivation = this.extractSubscriptionActivationContext(
+        webhookPayload,
+        verificationData,
+      );
+
+      if (!payment && subscriptionActivation && isVerifiedSuccess) {
+        const user = await this.usersRepository.findOne({
+          where: { id: subscriptionActivation.userId },
+          select: ['id', 'subscriptionPlan', 'roles', 'displayName', 'email'],
+          lock: { mode: 'pessimistic_write' },
+        });
+
+        if (!user) {
+          throw new NotFoundException('User not found');
+        }
+
+        const previousPlan = user.subscriptionPlan ?? SubscriptionPlan.LITE;
+        user.subscriptionPlan = subscriptionActivation.plan;
+        user.lastActiveAt = new Date();
+
+        const subscriptionPayment = paymentRepo.create(
+          this.buildSubscriptionPaymentRecord({
+            userId: user.id,
+            roles: user.roles ?? [],
+            plan: subscriptionActivation.plan,
+            txRef: webhookPayload.txRef,
+            providerReference:
+              this.asString(verificationData.reference) ?? webhookPayload.reference,
+            amount: verificationData.amount,
+            currency: verificationData.currency,
+          }),
+        );
+
+        await paymentRepo.save(subscriptionPayment);
+
+        await this.usersRepository.save(user);
+
+        return {
+          paymentId: subscriptionPayment.id,
+          eventId: null,
+          userId: user.id,
+          status: PaymentStatus.SUCCESS,
+          idempotent: false,
+          statusChanged: previousPlan !== subscriptionActivation.plan,
+          subscriptionActivated: true,
+          subscriptionPlan: subscriptionActivation.plan,
+        };
+      }
+
       if (!payment) {
         throw new NotFoundException('Payment not found');
       }
@@ -508,7 +621,11 @@ export class PaymentsService {
       });
       await transactionRepo.save(transaction);
 
-      if (nextStatus === PaymentStatus.SUCCESS && previousStatus !== PaymentStatus.SUCCESS) {
+      if (
+        payment.eventId &&
+        nextStatus === PaymentStatus.SUCCESS &&
+        previousStatus !== PaymentStatus.SUCCESS
+      ) {
         const rsvp = await rsvpRepo.findOne({
           where: {
             eventId: payment.eventId,
@@ -528,7 +645,7 @@ export class PaymentsService {
 
       return {
         paymentId: payment.id,
-        eventId: payment.eventId,
+        eventId: payment.eventId ?? null,
         userId: payment.userId,
         status: nextStatus,
         idempotent: false,
@@ -624,6 +741,10 @@ export class PaymentsService {
       const transactionRepo = manager.getRepository(Transaction);
       const rsvpRepo = manager.getRepository(Rsvp);
       const eventRepo = manager.getRepository(Event);
+      const subscriptionActivation = this.extractSubscriptionActivationContext(
+        this.toRecord(verification?.data ?? {}),
+        verification?.data,
+      );
 
       const verificationReference = this.asString(verification?.data?.reference);
       let payment = await paymentRepo.findOne({ where: { reference: safeTxRef } });
@@ -634,6 +755,43 @@ export class PaymentsService {
 
       if (!payment && verificationReference) {
         payment = await paymentRepo.findOne({ where: { providerReference: verificationReference } });
+      }
+
+      if (!payment && subscriptionActivation && this.isSuccessStatus(normalized)) {
+        const user = await this.usersRepository.findOne({
+          where: { id: subscriptionActivation.userId },
+          select: ['id', 'subscriptionPlan', 'roles', 'displayName', 'email'],
+        });
+
+        if (!user) {
+          return null;
+        }
+
+        const previousPlan = user.subscriptionPlan ?? SubscriptionPlan.LITE;
+        user.subscriptionPlan = subscriptionActivation.plan;
+        user.lastActiveAt = new Date();
+
+        const subscriptionPayment = paymentRepo.create(
+          this.buildSubscriptionPaymentRecord({
+            userId: user.id,
+            roles: user.roles ?? [],
+            plan: subscriptionActivation.plan,
+            txRef: safeTxRef,
+            providerReference: verificationReference ?? safeTxRef,
+            amount: verification?.data?.amount,
+            currency: verification?.data?.currency,
+          }),
+        );
+
+        await Promise.all([
+          this.usersRepository.save(user),
+          paymentRepo.save(subscriptionPayment),
+        ]);
+
+        return {
+          status: PaymentStatus.SUCCESS,
+          eventId: null,
+        };
       }
 
       if (!payment) {
@@ -685,6 +843,42 @@ export class PaymentsService {
         await paymentRepo.save(payment);
       }
 
+      if (!payment.eventId && nextStatus === PaymentStatus.SUCCESS && previousStatus !== PaymentStatus.SUCCESS) {
+        const subscriptionActivation = this.extractSubscriptionActivationContext(
+          this.toRecord(verification?.data ?? {}),
+          verification?.data,
+        );
+
+        if (subscriptionActivation) {
+          const user = await this.usersRepository.findOne({
+            where: { id: subscriptionActivation.userId },
+            select: ['id', 'subscriptionPlan', 'roles', 'displayName', 'email'],
+          });
+
+          if (user) {
+            user.subscriptionPlan = subscriptionActivation.plan;
+            user.lastActiveAt = new Date();
+
+            await Promise.all([
+              this.usersRepository.save(user),
+              paymentRepo.save(
+                paymentRepo.create(
+                  this.buildSubscriptionPaymentRecord({
+                    userId: user.id,
+                    roles: user.roles ?? [],
+                    plan: subscriptionActivation.plan,
+                    txRef: safeTxRef,
+                    providerReference: verificationReference ?? safeTxRef,
+                    amount: verification?.data?.amount,
+                    currency: verification?.data?.currency,
+                  }),
+                ),
+              ),
+            ]);
+          }
+        }
+      }
+
       await transactionRepo.save(
         transactionRepo.create({
           paymentId: payment.id,
@@ -703,7 +897,11 @@ export class PaymentsService {
         }),
       );
 
-      if (nextStatus === PaymentStatus.SUCCESS && previousStatus !== PaymentStatus.SUCCESS) {
+      if (
+        payment.eventId &&
+        nextStatus === PaymentStatus.SUCCESS &&
+        previousStatus !== PaymentStatus.SUCCESS
+      ) {
         const rsvp = await rsvpRepo.findOne({
           where: {
             eventId: payment.eventId,
@@ -733,7 +931,7 @@ export class PaymentsService {
 
     return {
       status: updated.status,
-      eventId: updated.eventId,
+      eventId: updated.eventId ?? null,
     };
   }
 
@@ -1237,8 +1435,103 @@ export class PaymentsService {
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
       return {};
     }
-
     return value as Record<string, unknown>;
+  }
+
+  private extractSubscriptionActivationContext(
+    source: Record<string, unknown>,
+    verificationData?: PayChanguVerifyDataDto,
+  ): { userId: string; plan: SubscriptionPlan } | null {
+    const sourceMeta = this.toRecord(source.meta ?? source.metadata);
+    const verificationRecord = verificationData ? this.toRecord(verificationData) : {};
+    const verificationMeta = this.toRecord(
+      verificationRecord.meta ?? verificationRecord.metadata,
+    );
+    const meta = Object.keys(sourceMeta).length > 0 ? sourceMeta : verificationMeta;
+
+    const type = this.asString(meta.type ?? source.type ?? verificationRecord.type);
+    if (type && type.toLowerCase() !== 'subscription') {
+      return null;
+    }
+
+    const rawUserId =
+      this.asString(meta.userId ?? meta.user_id) ??
+      this.asString(source.userId ?? source.user_id) ??
+      this.asString(verificationRecord.userId ?? verificationRecord.user_id);
+
+    const rawPlan =
+      this.asString(meta.plan) ??
+      this.asString(source.plan) ??
+      this.asString(verificationRecord.plan) ??
+      this.extractPlanFromReference(
+        this.asString(source.txRef ?? source.tx_ref ?? verificationRecord.tx_ref),
+      );
+
+    const plan = rawPlan ? this.normalizeSubscriptionPlan(rawPlan) : null;
+    if (!rawUserId || !plan) {
+      return null;
+    }
+
+    return {
+      userId: rawUserId,
+      plan,
+    };
+  }
+
+  private extractPlanFromReference(reference?: string): string | undefined {
+    if (!reference) {
+      return undefined;
+    }
+
+    const parts = reference.split('_').filter((part) => part.trim().length > 0);
+    return parts.length > 0 ? parts[parts.length - 1] : undefined;
+  }
+
+  private normalizeSubscriptionPlan(value: string): SubscriptionPlan | null {
+    const normalized = value.trim().toUpperCase();
+    return Object.values(SubscriptionPlan).includes(normalized as SubscriptionPlan)
+      ? (normalized as SubscriptionPlan)
+      : null;
+  }
+
+  private resolveSubscriptionAmount(plan: SubscriptionPlan, roles: string[]): string {
+    const audience = this.resolveAudienceFromRoles(roles);
+    const pricing = this.defaultPlanPricing[audience][plan];
+    return pricing.amount.toFixed(2);
+  }
+
+  private buildSubscriptionPaymentRecord(options: {
+    userId: string;
+    roles: string[];
+    plan: SubscriptionPlan;
+    txRef: string;
+    providerReference?: string | null;
+    amount?: unknown;
+    currency?: unknown;
+  }) {
+    const audience = this.resolveAudienceFromRoles(options.roles);
+    const verifiedAmount = this.asNumber(options.amount);
+    const fallbackPricing = this.defaultPlanPricing[audience][options.plan];
+
+    return {
+      userId: options.userId,
+      eventId: null,
+      amount: (verifiedAmount ?? fallbackPricing.amount).toFixed(2),
+      currency:
+        this.asString(options.currency)?.toUpperCase() ?? fallbackPricing.currency,
+      provider: 'PAYCHANGU',
+      reference: options.txRef,
+      providerReference: options.providerReference ?? null,
+      checkoutUrl: null,
+      status: PaymentStatus.SUCCESS,
+      metadata: {
+        type: 'subscription',
+        plan: options.plan,
+        audience,
+        txRef: options.txRef,
+        providerReference: options.providerReference ?? null,
+      },
+    };
   }
 
   private async resolvePricingForPlan(
