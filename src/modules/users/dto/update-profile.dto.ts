@@ -46,6 +46,30 @@ export class UpdateProfileDto {
   businessDescription?: string;
 
   @IsOptional()
+  @IsString()
+  @MaxLength(32)
+  taxiPhoneNumber?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(32)
+  taxiWhatsappNumber?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  transportNotes?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  isAlwaysOpenPlace?: boolean;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(160)
+  openingHoursNote?: string;
+
+  @IsOptional()
   @IsEnum(BusinessCoverage)
   operatingCoverage?: BusinessCoverage;
 

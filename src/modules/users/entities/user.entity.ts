@@ -61,6 +61,21 @@ export class User extends BaseEntity {
   @Column({ name: 'business_description', type: 'text', nullable: true })
   businessDescription?: string | null;
 
+  @Column({ name: 'taxi_phone_number', type: 'varchar', length: 32, nullable: true })
+  taxiPhoneNumber?: string | null;
+
+  @Column({ name: 'taxi_whatsapp_number', type: 'varchar', length: 32, nullable: true })
+  taxiWhatsappNumber?: string | null;
+
+  @Column({ name: 'transport_notes', type: 'text', nullable: true })
+  transportNotes?: string | null;
+
+  @Column({ name: 'is_always_open_place', type: 'boolean', default: false })
+  isAlwaysOpenPlace: boolean;
+
+  @Column({ name: 'opening_hours_note', type: 'varchar', length: 160, nullable: true })
+  openingHoursNote?: string | null;
+
   @Column({
     name: 'operating_coverage',
     type: 'enum',

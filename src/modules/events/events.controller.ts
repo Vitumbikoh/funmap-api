@@ -26,6 +26,13 @@ import { EventsService } from './events.service';
 export class EventsController {
   constructor(private readonly eventsService: EventsService) {}
 
+  @Get('community/pending')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN)
+  findPendingCommunityEvents() {
+    return this.eventsService.findPendingCommunityEvents();
+  }
+
   @Get('nearby')
   findNearby(@Query() query: NearbyEventsQueryDto) {
     return this.eventsService.findNearby(query);

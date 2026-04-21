@@ -103,6 +103,55 @@ export class UsersService {
     );
   }
 
+  async findNearbyPlaces(userId: string, query: GeoQueryDto) {
+    const radiusKm = query.radiusKm ?? 15;
+
+    return this.usersRepository.query(
+      `
+        SELECT
+          u.id,
+          COALESCE(NULLIF(u.business_name, ''), NULLIF(u.display_name, ''), NULLIF(u.username, ''), 'FunMap place') AS title,
+          u.business_name AS "businessName",
+          u.business_category AS "businessCategory",
+          u.business_description AS description,
+          u.avatar_url AS "avatarUrl",
+          u.business_cover_url AS "coverUrl",
+          u.taxi_phone_number AS "taxiPhoneNumber",
+          u.taxi_whatsapp_number AS "taxiWhatsappNumber",
+          u.transport_notes AS "transportNotes",
+          u.opening_hours_note AS "openingHoursNote",
+          u.is_always_open_place AS "isAlwaysOpenPlace",
+          u.township,
+          u.district,
+          u.region,
+          u.country,
+          ST_Y(u.home_location::geometry) AS latitude,
+          ST_X(u.home_location::geometry) AS longitude,
+          ST_Distance(
+            u.home_location,
+            ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography
+          ) / 1000 AS distance_km
+        FROM users u
+        WHERE u.id <> $4
+          AND u.account_status = 'ACTIVE'
+          AND u.home_location IS NOT NULL
+          AND u.is_always_open_place = true
+          AND (
+            'BUSINESS' = ANY(u.roles) OR
+            'CAPITAL_USER' = ANY(u.roles)
+          )
+          AND ST_DWithin(
+            u.home_location,
+            ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography,
+            $3 * 1000
+          )
+        ORDER BY distance_km ASC
+        LIMIT 100
+      `,
+      [query.longitude, query.latitude, radiusKm, userId],
+    );
+  }
+
   async updateProfile(userId: string, payload: UpdateProfileDto) {
     const user = await this.findById(userId);
     const nextUsername = normalizeHandle(payload.username);
@@ -110,6 +159,10 @@ export class UsersService {
     const nextDisplayName = normalizeText(payload.displayName);
     const nextBusinessName = normalizeText(payload.businessName);
     const nextBusinessDescription = normalizeText(payload.businessDescription);
+    const nextTaxiPhoneNumber = normalizePhone(payload.taxiPhoneNumber);
+    const nextTaxiWhatsappNumber = normalizePhone(payload.taxiWhatsappNumber);
+    const nextTransportNotes = normalizeText(payload.transportNotes);
+    const nextOpeningHoursNote = normalizeText(payload.openingHoursNote);
     const nextAvatarUrl = normalizeText(payload.avatarUrl);
     const nextBusinessCoverUrl = normalizeText(payload.businessCoverUrl);
     const nextVerificationDocumentUrl = normalizeText(
@@ -185,6 +238,24 @@ export class UsersService {
         nextBusinessDescription !== undefined
           ? nextBusinessDescription
           : user.businessDescription,
+      taxiPhoneNumber:
+        nextTaxiPhoneNumber !== undefined
+          ? nextTaxiPhoneNumber
+          : user.taxiPhoneNumber,
+      taxiWhatsappNumber:
+        nextTaxiWhatsappNumber !== undefined
+          ? nextTaxiWhatsappNumber
+          : user.taxiWhatsappNumber,
+      transportNotes:
+        nextTransportNotes !== undefined
+          ? nextTransportNotes
+          : user.transportNotes,
+      isAlwaysOpenPlace:
+        payload.isAlwaysOpenPlace ?? user.isAlwaysOpenPlace,
+      openingHoursNote:
+        nextOpeningHoursNote !== undefined
+          ? nextOpeningHoursNote
+          : user.openingHoursNote,
       operatingCoverage: payload.operatingCoverage ?? user.operatingCoverage,
       avatarUrl: nextAvatarUrl !== undefined ? nextAvatarUrl : user.avatarUrl,
       businessCoverUrl:
@@ -308,6 +379,11 @@ export class UsersService {
     user.displayName = 'Deleted User';
     user.avatarUrl = null;
     user.bio = null;
+    user.taxiPhoneNumber = null;
+    user.taxiWhatsappNumber = null;
+    user.transportNotes = null;
+    user.isAlwaysOpenPlace = false;
+    user.openingHoursNote = null;
     user.homeLocation = null;
     user.township = null;
     user.district = null;
@@ -845,5 +921,18 @@ function normalizeNationalId(value?: string | null) {
   }
 
   const normalized = value.trim().toUpperCase().replace(/\s+/g, '');
+  return normalized.length > 0 ? normalized : null;
+}
+
+function normalizePhone(value?: string | null) {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (value === null) {
+    return null;
+  }
+
+  const normalized = value.trim().replace(/[\s\-()]+/g, '');
   return normalized.length > 0 ? normalized : null;
 }

@@ -40,6 +40,11 @@ export class UsersController {
     return this.usersService.findNearbyUsers(user.sub, query);
   }
 
+  @Get('places/nearby')
+  getNearbyPlaces(@CurrentUser() user: JwtUser, @Query() query: GeoQueryDto) {
+    return this.usersService.findNearbyPlaces(user.sub, query);
+  }
+
   @Get('me/saved')
   getMySaved(@CurrentUser() user: JwtUser) {
     return this.usersService.getSavedItems(user.sub);

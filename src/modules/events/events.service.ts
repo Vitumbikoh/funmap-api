@@ -39,7 +39,9 @@ export class EventsService {
       user.roles.includes(Role.BUSINESS) ||
       user.roles.includes(Role.CAPITAL_USER);
 
-    if (!canCreateEvent) {
+    const isCommunityEvent = payload.category === EventCategory.COMMUNITY;
+
+    if (!canCreateEvent && !isCommunityEvent) {
       throw new ForbiddenException('Only business accounts can add events.');
     }
 
@@ -51,7 +53,7 @@ export class EventsService {
       },
     });
 
-    if (creator) {
+    if (creator && canCreateEvent) {
       enforceCoverageForBusiness(user.roles, creator.subscriptionPlan, {
         township: payload.township,
         district: payload.district,
@@ -93,6 +95,27 @@ export class EventsService {
     return this.eventsRepository.save(event);
   }
 
+  async findPendingCommunityEvents() {
+    return this.eventsRepository.query(
+      `
+        SELECT
+          e.*,
+          u.display_name AS "organizerDisplayName",
+          u.username AS "organizerUsername",
+          u.avatar_url AS "organizerAvatarUrl",
+          ST_Y(e.location::geometry) AS latitude,
+          ST_X(e.location::geometry) AS longitude
+        FROM events e
+        LEFT JOIN users u ON u.id = e.organizer_id
+        WHERE e.category = $1
+          AND e.is_published = false
+          AND e.status <> $2
+        ORDER BY e.created_at DESC
+      `,
+      [EventCategory.COMMUNITY, EventLifecycleStatus.CANCELLED],
+    );
+  }
+
   async findOne(eventId: string) {
     const event = await this.eventsRepository.findOne({
       where: { id: eventId },
@@ -102,7 +125,28 @@ export class EventsService {
       throw new NotFoundException('Event not found');
     }
 
-    return event;
+    const organizer = await this.usersRepository.findOne({
+      where: { id: event.organizerId },
+      select: {
+        id: true,
+        displayName: true,
+        username: true,
+        avatarUrl: true,
+        taxiPhoneNumber: true,
+        taxiWhatsappNumber: true,
+        transportNotes: true,
+      },
+    });
+
+    return {
+      ...event,
+      organizerDisplayName: organizer?.displayName ?? null,
+      organizerUsername: organizer?.username ?? null,
+      organizerAvatarUrl: organizer?.avatarUrl ?? null,
+      taxiPhoneNumber: organizer?.taxiPhoneNumber ?? null,
+      taxiWhatsappNumber: organizer?.taxiWhatsappNumber ?? null,
+      transportNotes: organizer?.transportNotes ?? null,
+    };
   }
 
   async findNearby(query: NearbyEventsQueryDto) {
