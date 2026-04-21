@@ -7,11 +7,19 @@ import { User } from '../users/entities/user.entity';
 import { Payment } from './entities/payment.entity';
 import { PaymentsController } from './payments.controller';
 import { PaymentsService } from './payments.service';
+import { SubscriptionPricing } from './entities/subscription-pricing.entity';
 import { Transaction } from './entities/transaction.entity';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Event, Rsvp, Payment, Transaction, User]),
+    TypeOrmModule.forFeature([
+      Event,
+      Rsvp,
+      Payment,
+      Transaction,
+      User,
+      SubscriptionPricing,
+    ]),
     NotificationsModule,
   ],
   controllers: [PaymentsController],

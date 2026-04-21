@@ -14,19 +14,24 @@ import { DataSource, Repository } from 'typeorm';
 import { AppConfigService } from '../../shared/config/app-config.service';
 import { NotificationType } from '../../shared/enums/notification-type.enum';
 import { PaymentStatus } from '../../shared/enums/payment-status.enum';
+import { PricingAudience } from '../../shared/enums/pricing-audience.enum';
 import { RsvpStatus } from '../../shared/enums/rsvp-status.enum';
+import { SubscriptionPlan } from '../../shared/enums/subscription-plan.enum';
 import { JwtUser } from '../../shared/interfaces/jwt-user.interface';
 import { Event } from '../events/entities/event.entity';
 import { NotificationsService } from '../notifications/notifications.service';
 import { Rsvp } from '../events/entities/rsvp.entity';
 import { User } from '../users/entities/user.entity';
 import { InitiatePaymentDto } from './dto/initiate-payment.dto';
+import { InitiateSubscriptionPaymentDto } from './dto/initiate-subscription-payment.dto';
 import {
   PayChanguVerifyDataDto,
   PayChanguVerifyResponseDto,
 } from './dto/paychangu-verify-response.dto';
 import { PayChanguWebhookDto } from './dto/paychangu-webhook.dto';
+import { UpdateSubscriptionPricingDto } from './dto/update-subscription-pricing.dto';
 import { Payment } from './entities/payment.entity';
+import { SubscriptionPricing } from './entities/subscription-pricing.entity';
 import { Transaction } from './entities/transaction.entity';
 
 type WebhookContext = {
@@ -52,6 +57,24 @@ type PayChanguInitiateResponse = {
 export class PaymentsService {
   private readonly logger = new Logger(PaymentsService.name);
 
+  private readonly defaultPlanPricing: Record<
+    PricingAudience,
+    Record<SubscriptionPlan, { amount: number; currency: string; billingCycle: 'MONTHLY' }>
+  > = {
+    [PricingAudience.CLIENTELE]: {
+      [SubscriptionPlan.LITE]: { amount: 0, currency: 'USD', billingCycle: 'MONTHLY' },
+      [SubscriptionPlan.BRONZE]: { amount: 1.99, currency: 'USD', billingCycle: 'MONTHLY' },
+      [SubscriptionPlan.SILVER]: { amount: 3.99, currency: 'USD', billingCycle: 'MONTHLY' },
+      [SubscriptionPlan.GOLD]: { amount: 7.99, currency: 'USD', billingCycle: 'MONTHLY' },
+    },
+    [PricingAudience.CAPITAL]: {
+      [SubscriptionPlan.LITE]: { amount: 0, currency: 'USD', billingCycle: 'MONTHLY' },
+      [SubscriptionPlan.BRONZE]: { amount: 7.99, currency: 'USD', billingCycle: 'MONTHLY' },
+      [SubscriptionPlan.SILVER]: { amount: 12.99, currency: 'USD', billingCycle: 'MONTHLY' },
+      [SubscriptionPlan.GOLD]: { amount: 19.99, currency: 'USD', billingCycle: 'MONTHLY' },
+    },
+  };
+
   constructor(
     @InjectRepository(Event)
     private readonly eventsRepository: Repository<Event>,
@@ -63,10 +86,241 @@ export class PaymentsService {
     private readonly transactionsRepository: Repository<Transaction>,
     @InjectRepository(User)
     private readonly usersRepository: Repository<User>,
+    @InjectRepository(SubscriptionPricing)
+    private readonly subscriptionPricingRepository: Repository<SubscriptionPricing>,
     private readonly configService: AppConfigService,
     private readonly notificationsService: NotificationsService,
     private readonly dataSource: DataSource,
   ) {}
+
+  async getCurrentUserAppUsageFee(userId: string) {
+    const user = await this.usersRepository.findOne({
+      where: { id: userId },
+      select: ['id', 'roles', 'subscriptionPlan'],
+    });
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    const audience = this.resolveAudienceFromRoles(user.roles ?? []);
+    const plan = user.subscriptionPlan ?? SubscriptionPlan.LITE;
+    const resolved = await this.resolvePricingForPlan(audience, plan);
+
+    return {
+      userId: user.id,
+      audience,
+      subscriptionPlan: plan,
+      amount: resolved.amount,
+      currency: resolved.currency,
+      billingCycle: resolved.billingCycle,
+      chargeEnabled: resolved.isActive,
+      source: resolved.source,
+      note: resolved.isActive
+        ? 'Active app usage fee configured for your current plan.'
+        : 'App usage fee for your current plan is currently disabled by admin.',
+    };
+  }
+
+  async getSubscriptionPricingCatalogForUser(userId: string) {
+    const user = await this.usersRepository.findOne({
+      where: { id: userId },
+      select: ['id', 'roles', 'subscriptionPlan'],
+    });
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    const audience = this.resolveAudienceFromRoles(user.roles ?? []);
+    const currentPlan = user.subscriptionPlan ?? SubscriptionPlan.LITE;
+
+    const items = await Promise.all(
+      Object.values(SubscriptionPlan).map(async (plan) => {
+        const pricing = await this.resolvePricingForPlan(audience, plan);
+        return {
+          audience,
+          subscriptionPlan: plan,
+          amount: pricing.amount,
+          currency: pricing.currency,
+          billingCycle: pricing.billingCycle,
+          chargeEnabled: pricing.isActive,
+          source: pricing.source,
+          isCurrentPlan: currentPlan === plan,
+          isFreeTier: pricing.amount <= 0 || !pricing.isActive,
+        };
+      }),
+    );
+
+    return {
+      audience,
+      currentPlan,
+      items,
+    };
+  }
+
+  async listSubscriptionPricingForAdmin() {
+    const configured = await this.subscriptionPricingRepository.find();
+    const configuredMap = new Map(
+      configured.map((item) => [`${item.audience}:${item.subscriptionPlan}`, item]),
+    );
+
+    const plans = Object.values(SubscriptionPlan).map((plan) => {
+      const clienteleFromDb = configuredMap.get(`${PricingAudience.CLIENTELE}:${plan}`);
+      const capitalFromDb = configuredMap.get(`${PricingAudience.CAPITAL}:${plan}`);
+      const clienteleFallback = this.defaultPlanPricing[PricingAudience.CLIENTELE][plan];
+      const capitalFallback = this.defaultPlanPricing[PricingAudience.CAPITAL][plan];
+
+      return {
+        subscriptionPlan: plan,
+        clientele: {
+          amount: clienteleFromDb ? Number(clienteleFromDb.amount) : clienteleFallback.amount,
+          currency: clienteleFromDb?.currency ?? clienteleFallback.currency,
+          billingCycle: clienteleFallback.billingCycle,
+          chargeEnabled: clienteleFromDb?.isActive ?? true,
+          source: clienteleFromDb ? 'ADMIN' : 'DEFAULT',
+          updatedAt: clienteleFromDb?.updatedAt ?? null,
+          updatedByUserId: clienteleFromDb?.updatedByUserId ?? null,
+        },
+        capital: {
+          amount: capitalFromDb ? Number(capitalFromDb.amount) : capitalFallback.amount,
+          currency: capitalFromDb?.currency ?? capitalFallback.currency,
+          billingCycle: capitalFallback.billingCycle,
+          chargeEnabled: capitalFromDb?.isActive ?? true,
+          source: capitalFromDb ? 'ADMIN' : 'DEFAULT',
+          updatedAt: capitalFromDb?.updatedAt ?? null,
+          updatedByUserId: capitalFromDb?.updatedByUserId ?? null,
+        },
+      };
+    });
+
+    return {
+      items: plans,
+      defaultsSource:
+        'FUNMAP-CHILLZ-SPOT-BUSINESS-CONCEPT.extracted.txt subscription coverage tier suggestions',
+    };
+  }
+
+  async updateSubscriptionPricingForAdmin(
+    adminUserId: string,
+    audience: PricingAudience,
+    plan: SubscriptionPlan,
+    payload: UpdateSubscriptionPricingDto,
+  ) {
+    if (
+      payload.amount === undefined &&
+      payload.currency === undefined &&
+      payload.isActive === undefined
+    ) {
+      throw new BadRequestException('Provide at least one field to update.');
+    }
+
+    const normalizedCurrency =
+      payload.currency === undefined
+        ? undefined
+        : payload.currency.trim().toUpperCase();
+
+    if (normalizedCurrency !== undefined && normalizedCurrency.length < 3) {
+      throw new BadRequestException('Currency must be at least 3 characters long.');
+    }
+
+    let pricing = await this.subscriptionPricingRepository.findOne({
+      where: { audience, subscriptionPlan: plan },
+    });
+
+    if (!pricing) {
+      const defaults = this.defaultPlanPricing[audience][plan];
+      pricing = this.subscriptionPricingRepository.create({
+        audience,
+        subscriptionPlan: plan,
+        amount: defaults.amount.toFixed(2),
+        currency: defaults.currency,
+        isActive: true,
+      });
+    }
+
+    if (payload.amount !== undefined) {
+      pricing.amount = payload.amount.toFixed(2);
+    }
+
+    if (normalizedCurrency !== undefined) {
+      pricing.currency = normalizedCurrency;
+    }
+
+    if (payload.isActive !== undefined) {
+      pricing.isActive = payload.isActive;
+    }
+
+    pricing.updatedByUserId = adminUserId;
+    const saved = await this.subscriptionPricingRepository.save(pricing);
+
+    return {
+      message: `Pricing updated for ${saved.subscriptionPlan}.`,
+      pricing: {
+        audience: saved.audience,
+        subscriptionPlan: saved.subscriptionPlan,
+        amount: Number(saved.amount),
+        currency: saved.currency,
+        billingCycle: this.defaultPlanPricing[saved.audience][saved.subscriptionPlan].billingCycle,
+        chargeEnabled: saved.isActive,
+        source: 'ADMIN',
+        updatedAt: saved.updatedAt,
+        updatedByUserId: saved.updatedByUserId,
+      },
+    };
+  }
+
+  async initiateSubscriptionCheckout(
+    user: JwtUser,
+    payload: InitiateSubscriptionPaymentDto,
+  ) {
+    const profile = await this.usersRepository.findOne({
+      where: { id: user.sub },
+      select: ['id', 'roles', 'displayName', 'email'],
+    });
+
+    if (!profile) {
+      throw new NotFoundException('User not found');
+    }
+
+    const audience = this.resolveAudienceFromRoles(profile.roles ?? []);
+    const pricing = await this.resolvePricingForPlan(audience, payload.plan);
+
+    if (!pricing.isActive || pricing.amount <= 0) {
+      return {
+        plan: payload.plan,
+        audience,
+        message: 'Selected plan is currently in free tier mode. No checkout is required.',
+        checkoutUrl: null,
+      };
+    }
+
+    const txRef = `sub_${Date.now()}_${user.sub.slice(0, 8)}_${payload.plan.toLowerCase()}`;
+    const checkout = await this.createPayChanguSubscriptionCheckoutSession(
+      {
+        id: profile.id,
+        displayName: profile.displayName ?? null,
+        email: profile.email ?? null,
+      },
+      payload.plan,
+      pricing.amount,
+      pricing.currency,
+      txRef,
+      audience,
+    );
+
+    return {
+      plan: payload.plan,
+      audience,
+      amount: pricing.amount,
+      currency: pricing.currency,
+      billingCycle: pricing.billingCycle,
+      checkoutUrl: checkout.checkoutUrl,
+      providerReference: txRef,
+      status: checkout.status,
+      message: 'Complete checkout then refresh your profile to confirm plan updates.',
+    };
+  }
 
   async initiatePayment(user: JwtUser, payload: InitiatePaymentDto) {
     const event = await this.eventsRepository.findOne({
@@ -618,6 +872,114 @@ export class PaymentsService {
     }
   }
 
+  private async createPayChanguSubscriptionCheckoutSession(
+    profile: { id: string; displayName: string | null; email: string | null },
+    plan: SubscriptionPlan,
+    amount: number,
+    currency: string,
+    txRef: string,
+    audience: PricingAudience,
+  ): Promise<{ checkoutUrl: string; status: string | null }> {
+    const secretKey = this.configService.payChanguConfig.secretKey;
+    const callbackUrl = this.configService.payChanguConfig.callbackUrl;
+    const returnUrl = this.configService.payChanguConfig.returnUrl;
+
+    if (!secretKey) {
+      throw new InternalServerErrorException('PayChangu secret key is not configured');
+    }
+
+    if (!callbackUrl || !returnUrl) {
+      throw new InternalServerErrorException(
+        'PayChangu callback and return URLs are not configured',
+      );
+    }
+
+    const fullName = (profile.displayName ?? '').trim();
+    const [firstName, ...lastNameParts] = fullName.length > 0 ? fullName.split(/\s+/) : [];
+
+    const fallbackEmail = `user-${profile.id.slice(0, 8)}@funmap.test`;
+    const email = (profile.email ?? fallbackEmail).trim();
+
+    const requestBody = {
+      amount,
+      currency,
+      email,
+      first_name: firstName || 'FunMap',
+      last_name: lastNameParts.join(' ') || 'User',
+      callback_url: callbackUrl,
+      return_url: returnUrl,
+      tx_ref: txRef,
+      customization: {
+        title: `FunMap - ${audience} ${plan} plan`,
+        description: `Subscription payment for ${audience} ${plan} plan`,
+      },
+      meta: {
+        userId: profile.id,
+        audience,
+        plan,
+        type: 'subscription',
+      },
+    };
+
+    const baseUrl = this.configService.payChanguConfig.baseUrl.replace(/\/$/, '');
+    const paymentPath = this.configService.payChanguConfig.paymentPath;
+    const requestUrl = `${baseUrl}${paymentPath.startsWith('/') ? '' : '/'}${paymentPath}`;
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 12_000);
+
+    try {
+      const response = await fetch(requestUrl, {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${secretKey}`,
+        },
+        body: JSON.stringify(requestBody),
+        signal: controller.signal,
+      });
+
+      const raw = await response.text();
+      let parsed: PayChanguInitiateResponse | null = null;
+      try {
+        parsed = JSON.parse(raw) as PayChanguInitiateResponse;
+      } catch {
+        parsed = null;
+      }
+
+      if (!response.ok || !parsed) {
+        this.logger.error(
+          `PayChangu initiate subscription failed (${response.status}): ${raw}`,
+        );
+        throw new BadGatewayException('Unable to initiate PayChangu hosted payment');
+      }
+
+      const checkoutUrl = this.asString(parsed.data?.checkout_url);
+      if (!checkoutUrl) {
+        this.logger.error(`PayChangu response missing checkout_url: ${raw}`);
+        throw new BadGatewayException('PayChangu did not return a checkout URL');
+      }
+
+      return {
+        checkoutUrl,
+        status: this.asString(parsed.data?.data?.status) ?? null,
+      };
+    } catch (error) {
+      if (error instanceof BadGatewayException) {
+        throw error;
+      }
+
+      this.logger.error(
+        `Unable to create PayChangu subscription checkout session for tx_ref ${txRef}`,
+        error instanceof Error ? error.stack : undefined,
+      );
+      throw new BadGatewayException('Unable to create PayChangu subscription checkout session');
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
   private resolveSignature(
     signature: string | undefined,
     headers: IncomingHttpHeaders,
@@ -877,5 +1239,46 @@ export class PaymentsService {
     }
 
     return value as Record<string, unknown>;
+  }
+
+  private async resolvePricingForPlan(
+    audience: PricingAudience,
+    plan: SubscriptionPlan,
+  ): Promise<{
+    amount: number;
+    currency: string;
+    billingCycle: 'MONTHLY';
+    isActive: boolean;
+    source: 'ADMIN' | 'DEFAULT';
+  }> {
+    const pricing = await this.subscriptionPricingRepository.findOne({
+      where: { audience, subscriptionPlan: plan },
+    });
+
+    const fallback = this.defaultPlanPricing[audience][plan];
+    if (!pricing) {
+      return {
+        amount: fallback.amount,
+        currency: fallback.currency,
+        billingCycle: fallback.billingCycle,
+        isActive: true,
+        source: 'DEFAULT',
+      };
+    }
+
+    return {
+      amount: Number(pricing.amount),
+      currency: pricing.currency,
+      billingCycle: fallback.billingCycle,
+      isActive: pricing.isActive,
+      source: 'ADMIN',
+    };
+  }
+
+  private resolveAudienceFromRoles(roles: string[]): PricingAudience {
+    const normalized = roles.map((item) => item.toUpperCase());
+    const isCapital =
+      normalized.includes('BUSINESS') || normalized.includes('CAPITAL_USER');
+    return isCapital ? PricingAudience.CAPITAL : PricingAudience.CLIENTELE;
   }
 }
