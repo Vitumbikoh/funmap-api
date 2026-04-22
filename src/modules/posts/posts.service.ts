@@ -228,7 +228,7 @@ export class PostsService implements OnModuleInit, OnModuleDestroy {
     return this.postsRepository.save(post);
   }
 
-  async findNearbyStatuses(query: GeoQueryDto) {
+  async findNearbyStatuses(user: JwtUser, query: GeoQueryDto) {
     return this.postsRepository.query(
       `
         SELECT
@@ -246,6 +246,7 @@ export class PostsService implements OnModuleInit, OnModuleDestroy {
         WHERE p.content_type = 'STATUS'
           AND p.expires_at > NOW()
           AND p.location IS NOT NULL
+          AND p.author_id <> $4
           AND ST_DWithin(
             p.location,
             ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography,
@@ -254,7 +255,7 @@ export class PostsService implements OnModuleInit, OnModuleDestroy {
         ORDER BY p.created_at DESC
         LIMIT 50
       `,
-      [query.longitude, query.latitude, query.radiusKm ?? 10],
+      [query.longitude, query.latitude, query.radiusKm ?? 10, user.sub],
     );
   }
 

@@ -11,8 +11,9 @@ export class StatusesController {
   constructor(private readonly postsService: PostsService) {}
 
   @Get('nearby')
-  findNearby(@Query() query: GeoQueryDto) {
-    return this.postsService.findNearbyStatuses(query);
+  @UseGuards(JwtAuthGuard)
+  findNearby(@CurrentUser() user: JwtUser, @Query() query: GeoQueryDto) {
+    return this.postsService.findNearbyStatuses(user, query);
   }
 
   @Get('mine')
