@@ -106,6 +106,16 @@ export class User extends BaseEntity {
   })
   subscriptionPlan: SubscriptionPlan;
 
+  @Column({ name: 'subscription_expires_at', type: 'timestamptz', nullable: true })
+  subscriptionExpiresAt?: Date | null;
+
+  @Column({
+    name: 'subscription_renewal_reminder_sent_at',
+    type: 'timestamptz',
+    nullable: true,
+  })
+  subscriptionRenewalReminderSentAt?: Date | null;
+
   @Column({ type: 'text', nullable: true })
   bio?: string | null;
 

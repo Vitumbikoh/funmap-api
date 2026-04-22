@@ -12,9 +12,14 @@ import {
   Min,
 } from 'class-validator';
 import { ContentVisibility } from '../../../shared/enums/content-visibility.enum';
+import { ContentType } from '../../../shared/enums/content-type.enum';
 import { MoodTag } from '../../../shared/enums/mood-tag.enum';
 
 export class CreatePostDto {
+  @IsOptional()
+  @IsEnum(ContentType)
+  contentType?: ContentType = ContentType.POST;
+
   @IsOptional()
   @IsString()
   @MaxLength(2200)

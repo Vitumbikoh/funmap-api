@@ -46,6 +46,12 @@ export class Promotion extends BaseEntity {
   @Column({ name: 'audience_country', type: 'varchar', length: 100, nullable: true })
   audienceCountry?: string | null;
 
+  @Column({ name: 'external_platforms', type: 'text', array: true, default: [] })
+  externalPlatforms: string[];
+
+  @Column({ name: 'external_landing_url', type: 'text', nullable: true })
+  externalLandingUrl?: string | null;
+
   @Column({ name: 'starts_at', type: 'timestamptz' })
   startsAt: Date;
 

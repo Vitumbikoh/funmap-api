@@ -5,25 +5,33 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, LessThanOrEqual, Repository } from 'typeorm';
+import { In, LessThanOrEqual, MoreThanOrEqual, Repository } from 'typeorm';
 import { JwtUser } from '../../shared/interfaces/jwt-user.interface';
 import { PaymentStatus } from '../../shared/enums/payment-status.enum';
 import { Event } from '../events/entities/event.entity';
 import { Payment } from '../payments/entities/payment.entity';
 import { Post } from '../posts/entities/post.entity';
 import { Reel } from '../reels/entities/reel.entity';
+import { User } from '../users/entities/user.entity';
 import { CreatePromotionDto } from './dto/create-promotion.dto';
 import { ListPromotionsQueryDto } from './dto/list-promotions-query.dto';
 import { UpdatePromotionStatusDto } from './dto/update-promotion-status.dto';
 import { Promotion } from './entities/promotion.entity';
 import { PromotionStatus } from './enums/promotion-status.enum';
 import { PromotionTargetType } from './enums/promotion-target-type.enum';
+import {
+  assertSubscriptionFeatureAccess,
+  hasSubscriptionFeatureAccess,
+  resolveEffectiveSubscriptionPlan,
+} from '../../shared/services/subscription-access.service';
 
 @Injectable()
 export class PromotionsService {
   constructor(
     @InjectRepository(Promotion)
     private readonly promotionsRepository: Repository<Promotion>,
+    @InjectRepository(User)
+    private readonly usersRepository: Repository<User>,
     @InjectRepository(Payment)
     private readonly paymentsRepository: Repository<Payment>,
     @InjectRepository(Post)
@@ -35,6 +43,60 @@ export class PromotionsService {
   ) {}
 
   async create(user: JwtUser, payload: CreatePromotionDto) {
+    const owner = await this.usersRepository.findOne({
+      where: { id: user.sub },
+      select: {
+        id: true,
+        roles: true,
+        subscriptionPlan: true,
+        subscriptionExpiresAt: true,
+      },
+    });
+
+    if (!owner) {
+      throw new NotFoundException('User not found');
+    }
+
+    assertSubscriptionFeatureAccess(owner, 'promotions');
+    const effectivePlan = resolveEffectiveSubscriptionPlan(owner).effectivePlan;
+
+    if (
+      hasSubscriptionFeatureAccess(owner, 'promotions') &&
+      !hasSubscriptionFeatureAccess(owner, 'advanced_analytics')
+    ) {
+      const cycleStart = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      const promotionsThisCycle = await this.promotionsRepository.count({
+        where: {
+          ownerUserId: user.sub,
+          createdAt: MoreThanOrEqual(cycleStart),
+        },
+      });
+
+      if (promotionsThisCycle >= 1) {
+        throw new ForbiddenException(
+          'Your BRONZE plan includes 1 promotion per monthly cycle. Upgrade to SILVER for more.',
+        );
+      }
+    }
+
+    const externalPlatforms = (payload.externalPlatforms ?? [])
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0);
+
+    if (externalPlatforms.length > 0 || payload.externalLandingUrl?.trim()) {
+      if (!hasSubscriptionFeatureAccess(owner, 'external_promotion')) {
+        throw new ForbiddenException(
+          'Upgrade to SILVER or GOLD to unlock external promotion capabilities.',
+        );
+      }
+
+      if (effectivePlan === 'SILVER' && externalPlatforms.length > 2) {
+        throw new ForbiddenException(
+          'SILVER supports up to 2 external promotion channels per promotion. Upgrade to GOLD for more.',
+        );
+      }
+    }
+
     const startsAt = new Date(payload.startsAt);
     const endsAt = new Date(payload.endsAt);
 
@@ -53,13 +115,18 @@ export class PromotionsService {
       targetId: payload.targetId,
       budgetAmount: payload.budgetAmount.toFixed(2),
       currency: payload.currency?.trim().toUpperCase() ?? 'MWK',
-      boostMultiplier: payload.boostMultiplier ?? 1.25,
+      boostMultiplier: this.resolveAllowedBoostMultiplier(
+        effectivePlan,
+        payload.boostMultiplier,
+      ),
       startsAt,
       endsAt,
       impressionGoal: payload.impressionGoal,
       audienceDistrict: payload.audienceDistrict?.trim(),
       audienceRegion: payload.audienceRegion?.trim(),
       audienceCountry: payload.audienceCountry?.trim(),
+      externalPlatforms,
+      externalLandingUrl: payload.externalLandingUrl?.trim() || null,
       status,
     });
 
@@ -217,5 +284,22 @@ export class PromotionsService {
     if (reel.authorId !== ownerUserId) {
       throw new ForbiddenException('You can only sponsor your own reels');
     }
+  }
+
+  private resolveAllowedBoostMultiplier(
+    plan: string,
+    requested?: number,
+  ) {
+    const proposed = requested ?? 1.25;
+    const cap =
+      plan === 'GOLD' ? 5 : plan === 'SILVER' ? 3 : plan === 'BRONZE' ? 1.5 : 1;
+
+    if (proposed > cap) {
+      throw new ForbiddenException(
+        `${plan} allows boost multipliers up to ${cap.toFixed(2)}.`,
+      );
+    }
+
+    return proposed;
   }
 }

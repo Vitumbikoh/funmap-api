@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -29,6 +30,13 @@ import { UpdateProfileDto } from './dto/update-profile.dto';
 import { AdminListUsersQueryDto } from './dto/admin-list-users-query.dto';
 import { AdminUpdateAccountStatusDto } from './dto/admin-update-account-status.dto';
 import { User } from './entities/user.entity';
+import {
+  assertSubscriptionFeatureAccess,
+  buildSubscriptionAccessPayload,
+  resolveEffectiveSubscriptionPlan,
+  resolveMapAccess,
+} from '../../shared/services/subscription-access.service';
+import { buildDiscoveryScopeCondition } from '../../shared/services/discovery-visibility.service';
 
 @Injectable()
 export class UsersService {
@@ -105,6 +113,15 @@ export class UsersService {
 
   async findNearbyPlaces(userId: string, query: GeoQueryDto) {
     const radiusKm = query.radiusKm ?? 15;
+    const viewer = await this.findById(userId);
+    const mapAccess = resolveMapAccess(viewer);
+
+    if (!mapAccess.places) {
+      throw new ForbiddenException('Upgrade to BRONZE to unlock place discovery on the map.');
+    }
+
+    const params: unknown[] = [query.longitude, query.latitude, radiusKm, userId];
+    const scopeCondition = buildDiscoveryScopeCondition('u', viewer, params);
 
     return this.usersRepository.query(
       `
@@ -140,6 +157,7 @@ export class UsersService {
             'BUSINESS' = ANY(u.roles) OR
             'CAPITAL_USER' = ANY(u.roles)
           )
+          AND ${scopeCondition}
           AND ST_DWithin(
             u.home_location,
             ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography,
@@ -148,12 +166,27 @@ export class UsersService {
         ORDER BY distance_km ASC
         LIMIT 100
       `,
-      [query.longitude, query.latitude, radiusKm, userId],
+      params,
     );
   }
 
   async updateProfile(userId: string, payload: UpdateProfileDto) {
     const user = await this.findById(userId);
+    if (
+      payload.subscriptionPlan !== undefined &&
+      payload.subscriptionPlan !== user.subscriptionPlan
+    ) {
+      if (payload.subscriptionPlan !== SubscriptionPlan.LITE) {
+        throw new BadRequestException(
+          'Paid plan changes must be completed through subscription checkout.',
+        );
+      }
+
+      user.subscriptionPlan = SubscriptionPlan.LITE;
+      user.subscriptionExpiresAt = null;
+      user.subscriptionRenewalReminderSentAt = null;
+    }
+
     const nextUsername = normalizeHandle(payload.username);
     const nextEmail = normalizeEmail(payload.email);
     const nextDisplayName = normalizeText(payload.displayName);
@@ -274,7 +307,7 @@ export class UsersService {
         nextNationalIdDocumentUrl !== undefined
           ? nextNationalIdDocumentUrl
           : user.nationalIdDocumentUrl,
-      subscriptionPlan: payload.subscriptionPlan ?? user.subscriptionPlan,
+      subscriptionPlan: user.subscriptionPlan,
       bio: nextBio !== undefined ? nextBio : user.bio,
       township: nextTownship !== undefined ? nextTownship : user.township,
       district: nextDistrict !== undefined ? nextDistrict : user.district,
@@ -593,6 +626,19 @@ export class UsersService {
 
   async updateFunOclockPreferences(userId: string, payload: UpdateFunOclockDto) {
     const user = await this.findById(userId);
+    const lifecycle = resolveEffectiveSubscriptionPlan(user);
+    const isTryingToEnablePremiumFeature =
+      payload.enabled === true ||
+      (payload.enabled !== false &&
+        (payload.days !== undefined ||
+          payload.startHour !== undefined ||
+          payload.endHour !== undefined ||
+          payload.radiusKm !== undefined ||
+          payload.timezone !== undefined));
+
+    if (isTryingToEnablePremiumFeature && lifecycle.effectivePlan === SubscriptionPlan.LITE) {
+      assertSubscriptionFeatureAccess(user, 'fun_oclock_notifications');
+    }
 
     if (
       payload.startHour !== undefined &&
@@ -918,7 +964,10 @@ export class UsersService {
 
   private sanitizeUser(user: User) {
     const { passwordHash, ...safeUser } = user;
-    return safeUser;
+    return {
+      ...safeUser,
+      subscriptionAccess: buildSubscriptionAccessPayload(user),
+    };
   }
 
   private buildDeletedPhonePlaceholder(userId: string) {

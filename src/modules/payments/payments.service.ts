@@ -5,6 +5,8 @@ import {
   InternalServerErrorException,
   Logger,
   NotFoundException,
+  OnModuleDestroy,
+  OnModuleInit,
   UnauthorizedException,
 } from '@nestjs/common';
 import { createHmac, timingSafeEqual } from 'node:crypto';
@@ -33,6 +35,11 @@ import { UpdateSubscriptionPricingDto } from './dto/update-subscription-pricing.
 import { Payment } from './entities/payment.entity';
 import { SubscriptionPricing } from './entities/subscription-pricing.entity';
 import { Transaction } from './entities/transaction.entity';
+import {
+  buildSubscriptionAccessPayload,
+  resolveEffectiveSubscriptionPlan,
+  resolvePricingAudienceFromRoles,
+} from '../../shared/services/subscription-access.service';
 
 type WebhookContext = {
   signature: string | undefined;
@@ -54,8 +61,9 @@ type PayChanguInitiateResponse = {
 };
 
 @Injectable()
-export class PaymentsService {
+export class PaymentsService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(PaymentsService.name);
+  private subscriptionLifecycleTimer?: NodeJS.Timeout;
 
   private readonly defaultPlanPricing: Record<
     PricingAudience,
@@ -93,10 +101,29 @@ export class PaymentsService {
     private readonly dataSource: DataSource,
   ) {}
 
+  onModuleInit() {
+    this.reconcileSubscriptionLifecycle().catch(() => {
+      // Keep startup resilient to transient persistence issues.
+    });
+
+    this.subscriptionLifecycleTimer = setInterval(() => {
+      this.reconcileSubscriptionLifecycle().catch(() => {
+        // Keep lifecycle automation resilient to transient issues.
+      });
+    }, 15 * 60 * 1000);
+  }
+
+  onModuleDestroy() {
+    if (this.subscriptionLifecycleTimer) {
+      clearInterval(this.subscriptionLifecycleTimer);
+      this.subscriptionLifecycleTimer = undefined;
+    }
+  }
+
   async getCurrentUserAppUsageFee(userId: string) {
     const user = await this.usersRepository.findOne({
       where: { id: userId },
-      select: ['id', 'roles', 'subscriptionPlan'],
+      select: ['id', 'roles', 'subscriptionPlan', 'subscriptionExpiresAt'],
     });
 
     if (!user) {
@@ -104,7 +131,7 @@ export class PaymentsService {
     }
 
     const audience = this.resolveAudienceFromRoles(user.roles ?? []);
-    const plan = user.subscriptionPlan ?? SubscriptionPlan.LITE;
+    const plan = resolveEffectiveSubscriptionPlan(user).effectivePlan;
     const resolved = await this.resolvePricingForPlan(audience, plan);
 
     return {
@@ -125,7 +152,7 @@ export class PaymentsService {
   async getSubscriptionPricingCatalogForUser(userId: string) {
     const user = await this.usersRepository.findOne({
       where: { id: userId },
-      select: ['id', 'roles', 'subscriptionPlan'],
+      select: ['id', 'roles', 'subscriptionPlan', 'subscriptionExpiresAt'],
     });
 
     if (!user) {
@@ -133,7 +160,7 @@ export class PaymentsService {
     }
 
     const audience = this.resolveAudienceFromRoles(user.roles ?? []);
-    const currentPlan = user.subscriptionPlan ?? SubscriptionPlan.LITE;
+    const currentPlan = resolveEffectiveSubscriptionPlan(user).effectivePlan;
 
     const items = await Promise.all(
       Object.values(SubscriptionPlan).map(async (plan) => {
@@ -155,6 +182,12 @@ export class PaymentsService {
     return {
       audience,
       currentPlan,
+      subscriptionAccess: buildSubscriptionAccessPayload(user),
+      lifecycle: {
+        expiresAt: user.subscriptionExpiresAt?.toISOString() ?? null,
+        autoDowngradePlan: SubscriptionPlan.LITE,
+        renewalReminderWindowDays: 5,
+      },
       items,
     };
   }
@@ -352,6 +385,16 @@ export class PaymentsService {
     const pricing = await this.resolvePricingForPlan(audience, payload.plan);
 
     if (!pricing.isActive || pricing.amount <= 0) {
+      await this.usersRepository.update(
+        { id: user.sub },
+        {
+          subscriptionPlan: payload.plan,
+          subscriptionExpiresAt: payload.plan === SubscriptionPlan.LITE ? null : null,
+          subscriptionRenewalReminderSentAt: null,
+          lastActiveAt: new Date(),
+        },
+      );
+
       return {
         plan: payload.plan,
         audience,
@@ -519,6 +562,8 @@ export class PaymentsService {
 
         const previousPlan = user.subscriptionPlan ?? SubscriptionPlan.LITE;
         user.subscriptionPlan = subscriptionActivation.plan;
+        user.subscriptionExpiresAt = this.buildSubscriptionExpiryDate();
+        user.subscriptionRenewalReminderSentAt = null;
         user.lastActiveAt = new Date();
 
         const subscriptionPayment = paymentRepo.create(
@@ -1571,9 +1616,137 @@ export class PaymentsService {
   }
 
   private resolveAudienceFromRoles(roles: string[]): PricingAudience {
-    const normalized = roles.map((item) => item.toUpperCase());
-    const isCapital =
-      normalized.includes('BUSINESS') || normalized.includes('CAPITAL_USER');
-    return isCapital ? PricingAudience.CAPITAL : PricingAudience.CLIENTELE;
+    return resolvePricingAudienceFromRoles(roles);
+  }
+
+  private buildSubscriptionExpiryDate() {
+    return new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+  }
+
+  private async reconcileSubscriptionLifecycle() {
+    const [downgraded, reminded] = await Promise.all([
+      this.downgradeExpiredSubscriptions(),
+      this.notifyUsersBeforeSubscriptionExpiry(),
+    ]);
+
+    if (downgraded.updated > 0 || reminded.sent > 0) {
+      this.logger.log(
+        `Subscription lifecycle sync complete: ${downgraded.updated} downgraded, ${reminded.sent} reminded.`,
+      );
+    }
+  }
+
+  private async downgradeExpiredSubscriptions() {
+    const expiredUsers = await this.usersRepository.find({
+      where: [
+        { subscriptionPlan: SubscriptionPlan.BRONZE },
+        { subscriptionPlan: SubscriptionPlan.SILVER },
+        { subscriptionPlan: SubscriptionPlan.GOLD },
+      ],
+      select: {
+        id: true,
+        subscriptionPlan: true,
+        subscriptionExpiresAt: true,
+      },
+    });
+
+    const candidates = expiredUsers.filter(
+      (user) =>
+        user.subscriptionExpiresAt != null &&
+        user.subscriptionExpiresAt.getTime() <= Date.now(),
+    );
+
+    if (!candidates.length) {
+      return { updated: 0 };
+    }
+
+    for (const user of candidates) {
+      await this.usersRepository.update(
+        { id: user.id },
+        {
+          subscriptionPlan: SubscriptionPlan.LITE,
+          subscriptionExpiresAt: null,
+          subscriptionRenewalReminderSentAt: null,
+          lastActiveAt: new Date(),
+        },
+      );
+
+      await this.notificationsService.createNotification(
+        user.id,
+        NotificationType.PAYMENT,
+        'Subscription expired',
+        'Your subscription has expired and your account has been moved to LITE. Renew to restore premium access.',
+        {
+          action: 'SUBSCRIPTION_DOWNGRADED',
+          previousPlan: user.subscriptionPlan,
+          currentPlan: SubscriptionPlan.LITE,
+        },
+      );
+    }
+
+    return { updated: candidates.length };
+  }
+
+  private async notifyUsersBeforeSubscriptionExpiry() {
+    const premiumUsers = await this.usersRepository.find({
+      where: [
+        { subscriptionPlan: SubscriptionPlan.BRONZE },
+        { subscriptionPlan: SubscriptionPlan.SILVER },
+        { subscriptionPlan: SubscriptionPlan.GOLD },
+      ],
+      select: {
+        id: true,
+        subscriptionPlan: true,
+        subscriptionExpiresAt: true,
+        subscriptionRenewalReminderSentAt: true,
+      },
+    });
+
+    const now = Date.now();
+    const reminderWindowMs = 5 * 24 * 60 * 60 * 1000;
+    const due = premiumUsers.filter((user) => {
+      if (!user.subscriptionExpiresAt) {
+        return false;
+      }
+
+      const expiryMs = user.subscriptionExpiresAt.getTime();
+      return (
+        expiryMs > now &&
+        expiryMs - now <= reminderWindowMs &&
+        user.subscriptionRenewalReminderSentAt == null
+      );
+    });
+
+    if (!due.length) {
+      return { sent: 0 };
+    }
+
+    for (const user of due) {
+      const daysRemaining = Math.max(
+        1,
+        Math.ceil((user.subscriptionExpiresAt!.getTime() - now) / (24 * 60 * 60 * 1000)),
+      );
+
+      await this.notificationsService.createNotification(
+        user.id,
+        NotificationType.PAYMENT,
+        'Subscription ending soon',
+        `Your ${user.subscriptionPlan} plan expires in ${daysRemaining} day${daysRemaining > 1 ? 's' : ''}. Renew to keep premium access active.`,
+        {
+          action: 'SUBSCRIPTION_EXPIRING',
+          plan: user.subscriptionPlan,
+          daysRemaining,
+        },
+      );
+
+      await this.usersRepository.update(
+        { id: user.id },
+        {
+          subscriptionRenewalReminderSentAt: new Date(),
+        },
+      );
+    }
+
+    return { sent: due.length };
   }
 }

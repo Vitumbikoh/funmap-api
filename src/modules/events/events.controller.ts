@@ -34,8 +34,9 @@ export class EventsController {
   }
 
   @Get('nearby')
-  findNearby(@Query() query: NearbyEventsQueryDto) {
-    return this.eventsService.findNearby(query);
+  @UseGuards(JwtAuthGuard)
+  findNearby(@CurrentUser() user: JwtUser, @Query() query: NearbyEventsQueryDto) {
+    return this.eventsService.findNearby(user, query);
   }
 
   @Get('mine')

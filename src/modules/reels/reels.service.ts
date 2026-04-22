@@ -3,7 +3,9 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Point } from 'geojson';
 import { Repository } from 'typeorm';
 import { GeoQueryDto } from '../../shared/dto/geo-query.dto';
+import { Role } from '../../shared/enums/role.enum';
 import { JwtUser } from '../../shared/interfaces/jwt-user.interface';
+import { assertSubscriptionFeatureAccess } from '../../shared/services/subscription-access.service';
 import { User } from '../users/entities/user.entity';
 import { CreateReelDto } from './dto/create-reel.dto';
 import { Reel } from './entities/reel.entity';
@@ -18,6 +20,23 @@ export class ReelsService {
   ) {}
 
   async create(user: JwtUser, payload: CreateReelDto) {
+    const author = await this.usersRepository.findOne({
+      where: { id: user.sub },
+      select: {
+        id: true,
+        roles: true,
+        subscriptionPlan: true,
+        subscriptionExpiresAt: true,
+      },
+    });
+
+    const isCapitalUser =
+      author?.roles.includes(Role.BUSINESS) || author?.roles.includes(Role.CAPITAL_USER);
+
+    if (author && isCapitalUser) {
+      assertSubscriptionFeatureAccess(author, 'video_reels_uploads');
+    }
+
     const location =
       payload.latitude !== undefined && payload.longitude !== undefined
         ? ({
@@ -201,4 +220,3 @@ export class ReelsService {
     };
   }
 }
-

@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Comment } from '../../shared/database/entities/comment.entity';
@@ -9,7 +9,13 @@ import { Event } from '../events/entities/event.entity';
 import { Follow } from '../follows/entities/follow.entity';
 import { Post } from '../posts/entities/post.entity';
 import { Reel } from '../reels/entities/reel.entity';
+import { User } from '../users/entities/user.entity';
 import { FeedQueryDto } from './dto/feed-query.dto';
+import {
+  resolveAllowedMoodFilters,
+  resolveEffectiveSubscriptionPlan,
+} from '../../shared/services/subscription-access.service';
+import { buildDiscoveryScopeCondition } from '../../shared/services/discovery-visibility.service';
 
 @Injectable()
 export class FeedService {
@@ -30,16 +36,69 @@ export class FeedService {
     private readonly sharesRepository: Repository<Share>,
     @InjectRepository(View)
     private readonly viewsRepository: Repository<View>,
+    @InjectRepository(User)
+    private readonly usersRepository: Repository<User>,
   ) {}
 
-  async getNearbyFeed(query: FeedQueryDto) {
+  async getNearbyFeed(userId: string, query: FeedQueryDto) {
+    const viewer = await this.usersRepository.findOne({
+      where: { id: userId },
+      select: {
+        id: true,
+        subscriptionPlan: true,
+        subscriptionExpiresAt: true,
+        township: true,
+        district: true,
+        region: true,
+        country: true,
+      },
+    });
+
+    if (!viewer) {
+      throw new NotFoundException('User not found');
+    }
+
+    const normalizedMood = query.moodTag?.trim().toUpperCase();
+    if (normalizedMood) {
+      const allowedMoods = resolveAllowedMoodFilters(viewer);
+      if (allowedMoods.length == 0) {
+        throw new ForbiddenException('Upgrade to BRONZE to unlock mood filtering.');
+      }
+      if (!allowedMoods.includes(normalizedMood)) {
+        throw new ForbiddenException(
+          `Your current tier supports only these mood filters: ${allowedMoods.join(', ')}.`,
+        );
+      }
+    }
+
     const radiusKm = query.radiusKm ?? 10;
 
     const eventParams: unknown[] = [query.longitude, query.latitude, radiusKm];
     const eventConditions = [
       'e.end_date >= NOW()',
       'ST_DWithin(e.location, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography, $3 * 1000)',
+      buildDiscoveryScopeCondition('e', viewer, eventParams),
     ];
+
+    const postParams: unknown[] = [query.longitude, query.latitude, radiusKm];
+    const postConditions = [
+      'p.location IS NOT NULL',
+      'ST_DWithin(p.location, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography, $3 * 1000)',
+    ];
+    const reelParams: unknown[] = [query.longitude, query.latitude, radiusKm];
+    const reelConditions = [
+      'r.location IS NOT NULL',
+      'ST_DWithin(r.location, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography, $3 * 1000)',
+    ];
+
+    const { effectivePlan } = resolveEffectiveSubscriptionPlan(viewer);
+    if (effectivePlan === 'LITE' && viewer.district?.trim()) {
+      postParams.push(viewer.district.trim());
+      postConditions.push(`p.district ILIKE $${postParams.length}`);
+    } else if (viewer.country?.trim()) {
+      postParams.push(viewer.country.trim());
+      postConditions.push(`p.country ILIKE $${postParams.length}`);
+    }
 
     if (query.category) {
       eventParams.push(query.category);
@@ -103,16 +162,11 @@ export class FeedService {
             ORDER BY promo.boost_multiplier DESC, promo.created_at DESC
             LIMIT 1
           ) post_promo ON TRUE
-          WHERE p.location IS NOT NULL
-            AND ST_DWithin(
-              p.location,
-              ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography,
-              $3 * 1000
-            )
+          WHERE ${postConditions.join(' AND ')}
           ORDER BY score DESC
           LIMIT 20
         `,
-        [query.longitude, query.latitude, radiusKm],
+        postParams,
       ),
       this.reelsRepository.query(
         `
@@ -135,16 +189,11 @@ export class FeedService {
               GREATEST(0, 24 - EXTRACT(EPOCH FROM (NOW() - r.created_at)) / 3600)
             ) AS score
           FROM reels r
-          WHERE r.location IS NOT NULL
-            AND ST_DWithin(
-              r.location,
-              ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography,
-              $3 * 1000
-            )
+          WHERE ${reelConditions.join(' AND ')}
           ORDER BY score DESC
           LIMIT 20
         `,
-        [query.longitude, query.latitude, radiusKm],
+        reelParams,
       ),
       this.eventsRepository.query(
         `
@@ -366,4 +415,3 @@ export class FeedService {
       .slice(0, limit);
   }
 }
-

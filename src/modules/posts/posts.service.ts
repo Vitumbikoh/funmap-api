@@ -1,23 +1,48 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+  OnModuleDestroy,
+  OnModuleInit,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Point } from 'geojson';
-import { Repository } from 'typeorm';
+import { In, LessThanOrEqual, Not, Repository } from 'typeorm';
 import { GeoQueryDto } from '../../shared/dto/geo-query.dto';
+import { ContentVisibility } from '../../shared/enums/content-visibility.enum';
+import { ContentType } from '../../shared/enums/content-type.enum';
 import { JwtUser } from '../../shared/interfaces/jwt-user.interface';
 import { enforceCoverageForBusiness } from '../../shared/services/coverage-policy.service';
 import { User } from '../users/entities/user.entity';
 import { CreatePostDto } from './dto/create-post.dto';
+import { CreateStatusDto } from './dto/create-status.dto';
 import { UpdatePostDto } from './dto/update-post.dto';
 import { Post } from './entities/post.entity';
 
 @Injectable()
-export class PostsService {
+export class PostsService implements OnModuleInit, OnModuleDestroy {
+  private statusCleanupTimer?: NodeJS.Timeout;
+
   constructor(
     @InjectRepository(Post)
     private readonly postsRepository: Repository<Post>,
     @InjectRepository(User)
     private readonly usersRepository: Repository<User>,
   ) {}
+
+  onModuleInit() {
+    this.cleanupExpiredStatuses().catch(() => undefined);
+    this.statusCleanupTimer = setInterval(() => {
+      this.cleanupExpiredStatuses().catch(() => undefined);
+    }, 30 * 60 * 1000);
+  }
+
+  onModuleDestroy() {
+    if (this.statusCleanupTimer) {
+      clearInterval(this.statusCleanupTimer);
+      this.statusCleanupTimer = undefined;
+    }
+  }
 
   async create(user: JwtUser, payload: CreatePostDto) {
     const creator = await this.usersRepository.findOne({
@@ -47,6 +72,7 @@ export class PostsService {
 
     const post = this.postsRepository.create({
       authorId: user.sub,
+      contentType: ContentType.POST,
       caption: payload.caption,
       mediaIds: payload.mediaIds,
       visibility: payload.visibility,
@@ -65,6 +91,35 @@ export class PostsService {
     return this.postsRepository.save(post);
   }
 
+  async createStatus(user: JwtUser, payload: CreateStatusDto) {
+    const location =
+      payload.latitude !== undefined && payload.longitude !== undefined
+        ? ({
+            type: 'Point',
+            coordinates: [payload.longitude, payload.latitude],
+          } as Point)
+        : null;
+
+    const status = this.postsRepository.create({
+      authorId: user.sub,
+      contentType: ContentType.STATUS,
+      caption: payload.caption,
+      mediaIds: payload.mediaIds ?? [],
+      visibility: ContentVisibility.PUBLIC,
+      visibilityRadiusKm: payload.visibilityRadiusKm ?? 10,
+      location,
+      hashtags: [],
+      moodTag: null,
+      township: payload.township,
+      district: payload.district,
+      region: payload.region,
+      country: payload.country,
+      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+    });
+
+    return this.postsRepository.save(status);
+  }
+
   async findNearby(query: GeoQueryDto) {
     return this.postsRepository.query(
       `
@@ -76,6 +131,7 @@ export class PostsService {
           ) / 1000 AS distance_km
         FROM posts p
         WHERE p.location IS NOT NULL
+          AND p.content_type = 'POST'
           AND ST_DWithin(
             p.location,
             ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography,
@@ -90,7 +146,7 @@ export class PostsService {
 
   async findMine(user: JwtUser) {
     const items = await this.postsRepository.find({
-      where: { authorId: user.sub },
+      where: { authorId: user.sub, contentType: ContentType.POST },
       order: { createdAt: 'DESC' },
       take: 120,
     });
@@ -172,6 +228,49 @@ export class PostsService {
     return this.postsRepository.save(post);
   }
 
+  async findNearbyStatuses(query: GeoQueryDto) {
+    return this.postsRepository.query(
+      `
+        SELECT
+          p.*,
+          u.display_name AS "authorDisplayName",
+          u.username AS "authorUsername",
+          u.avatar_url AS "authorAvatarUrl",
+          u.roles AS "authorRoles",
+          ST_Distance(
+            p.location,
+            ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography
+          ) / 1000 AS distance_km
+        FROM posts p
+        INNER JOIN users u ON u.id = p.author_id
+        WHERE p.content_type = 'STATUS'
+          AND p.expires_at > NOW()
+          AND p.location IS NOT NULL
+          AND ST_DWithin(
+            p.location,
+            ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography,
+            $3 * 1000
+          )
+        ORDER BY p.created_at DESC
+        LIMIT 50
+      `,
+      [query.longitude, query.latitude, query.radiusKm ?? 10],
+    );
+  }
+
+  async findMyStatuses(user: JwtUser) {
+    const items = await this.postsRepository.find({
+      where: { authorId: user.sub, contentType: ContentType.STATUS },
+      order: { createdAt: 'DESC' },
+      take: 60,
+    });
+
+    return {
+      items,
+      total: items.length,
+    };
+  }
+
   async remove(user: JwtUser, postId: string) {
     const post = await this.getOwnedPost(user.sub, postId);
     await this.postsRepository.remove(post);
@@ -194,6 +293,13 @@ export class PostsService {
     }
 
     return post;
+  }
+
+  private async cleanupExpiredStatuses() {
+    await this.postsRepository.delete({
+      contentType: ContentType.STATUS,
+      expiresAt: LessThanOrEqual(new Date()),
+    });
   }
 }
 

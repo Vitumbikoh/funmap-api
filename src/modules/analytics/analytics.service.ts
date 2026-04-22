@@ -1,8 +1,9 @@
-import { Injectable } from '@nestjs/common';
+import { ForbiddenException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ContentTarget } from '../../shared/enums/content-target.enum';
 import { PaymentStatus } from '../../shared/enums/payment-status.enum';
+import { Role } from '../../shared/enums/role.enum';
 import { Event } from '../events/entities/event.entity';
 import { Payment } from '../payments/entities/payment.entity';
 import { Post } from '../posts/entities/post.entity';
@@ -10,6 +11,7 @@ import { Reel } from '../reels/entities/reel.entity';
 import { User } from '../users/entities/user.entity';
 import { UsersService } from '../users/users.service';
 import { CreatorAnalyticsRange } from './dto/creator-analytics-query.dto';
+import { resolveAnalyticsAccessLevel } from '../../shared/services/subscription-access.service';
 
 type MetricName = 'views' | 'rsvps' | 'paidAttendees';
 
@@ -33,7 +35,15 @@ export class AnalyticsService {
     userId: string,
     range: CreatorAnalyticsRange = CreatorAnalyticsRange.WEEK,
   ) {
-    await this.usersService.findById(userId);
+    const user = await this.usersService.findById(userId);
+    const isCapitalUser =
+      user.roles.includes(Role.BUSINESS) || user.roles.includes(Role.CAPITAL_USER);
+    const analyticsAccessLevel = resolveAnalyticsAccessLevel(user);
+
+    if (isCapitalUser && analyticsAccessLevel === 'NONE') {
+      throw new ForbiddenException('Upgrade to BRONZE to view analytics.');
+    }
+
     const windowStart = this.resolveWindowStart(range);
 
     const [
@@ -71,7 +81,7 @@ export class AnalyticsService {
       Number(interactionStats.shares ?? 0);
     const engagementRate = views > 0 ? (engagement / views) * 100 : 0;
 
-    return {
+    const basePayload = {
       filter: {
         range,
         windowStart: windowStart.toISOString(),
@@ -93,6 +103,62 @@ export class AnalyticsService {
         paidAttendees: Number(rsvpStats.paidAttendees ?? 0),
         activeEvents,
       },
+      accessLevel: analyticsAccessLevel,
+    };
+
+    if (!isCapitalUser) {
+      return {
+        ...basePayload,
+        revenue: {
+          successfulPayments: Number(paymentStats.successfulPayments ?? 0),
+          totalRevenue: Number(paymentStats.totalRevenue ?? 0),
+          currency: 'MWK',
+        },
+        audience: {
+          locations: audienceLocation,
+        },
+        highlights: {
+          mostViewedEvent: topEvent,
+          mostEngagingPost: topPost,
+          topPerformingContent: topContent,
+        },
+        performance: {
+          series: performance,
+        },
+      };
+    }
+
+    if (analyticsAccessLevel === 'BASIC') {
+      return {
+        ...basePayload,
+        metrics: {
+          rsvps: Number(rsvpStats.rsvps ?? 0),
+          activeEvents,
+        },
+      };
+    }
+
+    if (analyticsAccessLevel === 'ADVANCED') {
+      return {
+        ...basePayload,
+        revenue: {
+          successfulPayments: Number(paymentStats.successfulPayments ?? 0),
+          totalRevenue: Number(paymentStats.totalRevenue ?? 0),
+          currency: 'MWK',
+        },
+        metrics: {
+          ...basePayload.metrics,
+          paidAttendees: Number(rsvpStats.paidAttendees ?? 0),
+        },
+        highlights: {
+          mostViewedEvent: topEvent,
+          topPerformingContent: topContent,
+        },
+      };
+    }
+
+    return {
+      ...basePayload,
       revenue: {
         successfulPayments: Number(paymentStats.successfulPayments ?? 0),
         totalRevenue: Number(paymentStats.totalRevenue ?? 0),

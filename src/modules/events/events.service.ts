@@ -16,6 +16,15 @@ import { Role } from '../../shared/enums/role.enum';
 import { RsvpStatus } from '../../shared/enums/rsvp-status.enum';
 import { JwtUser } from '../../shared/interfaces/jwt-user.interface';
 import { enforceCoverageForBusiness } from '../../shared/services/coverage-policy.service';
+import {
+  hasSubscriptionFeatureAccess,
+  resolveEffectiveSubscriptionPlan,
+  resolveMapAccess,
+} from '../../shared/services/subscription-access.service';
+import {
+  assertAllowedMoodFilter,
+  buildDiscoveryScopeCondition,
+} from '../../shared/services/discovery-visibility.service';
 import { CreateEventDto } from './dto/create-event.dto';
 import { NearbyEventsQueryDto } from './dto/nearby-events-query.dto';
 import { UpdateEventDto } from './dto/update-event.dto';
@@ -89,6 +98,12 @@ export class EventsService implements OnModuleInit, OnModuleDestroy {
 
     const startDate = new Date(payload.startDate);
     const endDate = new Date(payload.endDate);
+
+    if (payload.paymentRequired && !payload.paymentLink?.trim()) {
+      throw new BadRequestException(
+        'Paid events must include a payment link or gateway before publishing.',
+      );
+    }
 
     const event = this.eventsRepository.create({
       organizerId: user.sub,
@@ -174,7 +189,27 @@ export class EventsService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  async findNearby(query: NearbyEventsQueryDto) {
+  async findNearby(user: JwtUser, query: NearbyEventsQueryDto) {
+    const viewer = await this.usersRepository.findOne({
+      where: { id: user.sub },
+      select: {
+        id: true,
+        roles: true,
+        subscriptionPlan: true,
+        subscriptionExpiresAt: true,
+        township: true,
+        district: true,
+        region: true,
+        country: true,
+      },
+    });
+
+    if (!viewer) {
+      throw new NotFoundException('User not found');
+    }
+
+    assertAllowedMoodFilter(viewer, query.moodTag);
+    const mapAccess = resolveMapAccess(viewer);
     const params: unknown[] = [
       query.longitude,
       query.latitude,
@@ -185,6 +220,7 @@ export class EventsService implements OnModuleInit, OnModuleDestroy {
       'e.is_published = true',
       'e.end_date >= NOW()',
       'ST_DWithin(e.location, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography, $3 * 1000)',
+      buildDiscoveryScopeCondition('e', viewer, params),
     ];
 
     if (query.category) {
@@ -230,6 +266,9 @@ export class EventsService implements OnModuleInit, OnModuleDestroy {
     )`;
 
     if (query.mapPinType === 'TRENDING') {
+      if (!mapAccess.trending) {
+        throw new ForbiddenException('Upgrade to SILVER to unlock trending map discovery.');
+      }
       conditions.push(trendingExpression);
     }
 
@@ -250,7 +289,19 @@ export class EventsService implements OnModuleInit, OnModuleDestroy {
           COALESCE(event_like_count.value, 0) AS "likeCount",
           COALESCE(event_comment_count.value, 0) AS "commentCount",
           COALESCE(event_share_count.value, 0) AS "shareCount",
-          CASE WHEN ${trendingExpression} THEN 'TRENDING' ELSE 'EVENT' END AS "pinType",
+          CASE
+            WHEN ${mapAccess.promotedPins ? `EXISTS (
+              SELECT 1
+              FROM promotions promo
+              WHERE promo.target_type = 'EVENT'
+                AND promo.target_id = e.id
+                AND promo.status = 'ACTIVE'
+                AND promo.starts_at <= NOW()
+                AND promo.ends_at >= NOW()
+            )` : 'FALSE'} THEN 'PROMOTED'
+            WHEN ${trendingExpression} THEN 'TRENDING'
+            ELSE 'EVENT'
+          END AS "pinType",
           ST_Y(e.location::geometry) AS latitude,
           ST_X(e.location::geometry) AS longitude,
           ST_Distance(
@@ -275,7 +326,23 @@ export class EventsService implements OnModuleInit, OnModuleDestroy {
           WHERE s.target_type::text = 'EVENT' AND s.target_id = e.id
         ) event_share_count ON TRUE
         WHERE ${conditions.join(' AND ')}
-        ORDER BY ${moodPriorityOrder} e.start_date ASC
+        ORDER BY
+          ${
+            mapAccess.promotedPins
+              ? `CASE
+                  WHEN EXISTS (
+                    SELECT 1
+                    FROM promotions promo
+                    WHERE promo.target_type = 'EVENT'
+                      AND promo.target_id = e.id
+                      AND promo.status = 'ACTIVE'
+                      AND promo.starts_at <= NOW()
+                      AND promo.ends_at >= NOW()
+                  ) THEN 1 ELSE 0
+                END DESC,`
+              : ''
+          }
+          ${moodPriorityOrder} e.start_date ASC
         LIMIT 50
       `,
       params,
@@ -337,6 +404,15 @@ export class EventsService implements OnModuleInit, OnModuleDestroy {
 
   async findAttendees(user: JwtUser, eventId: string) {
     await this.getOwnedEvent(user.sub, eventId);
+    const owner = await this.usersRepository.findOne({
+      where: { id: user.sub },
+      select: {
+        id: true,
+        roles: true,
+        subscriptionPlan: true,
+        subscriptionExpiresAt: true,
+      },
+    });
 
     const items = (await this.rsvpRepository.query(
       `
@@ -371,18 +447,38 @@ export class EventsService implements OnModuleInit, OnModuleDestroy {
       [eventId],
     )) as AttendeeItem[];
 
+    const canViewAttendeeList =
+      owner != null && hasSubscriptionFeatureAccess(owner, 'attendee_interaction');
+    const canViewBasicTotals =
+      owner != null && hasSubscriptionFeatureAccess(owner, 'basic_rsvp_tracking');
+
+    const totalsUnlocked = canViewBasicTotals || canViewAttendeeList;
+
     return {
-      items,
+      items: canViewAttendeeList ? items : [],
       totals: {
-        total: items.length,
-        confirmed: items.filter(
-          (item) => item.status === RsvpStatus.CONFIRMED,
-        ).length,
-        pending: items.filter(
-          (item) => item.status === RsvpStatus.PENDING,
-        ).length,
-        paid: items.filter((item) => item.paidAt != null).length,
+        total: totalsUnlocked ? items.length : 0,
+        confirmed: totalsUnlocked
+          ? items.filter((item) => item.status === RsvpStatus.CONFIRMED).length
+          : 0,
+        pending: totalsUnlocked
+          ? items.filter((item) => item.status === RsvpStatus.PENDING).length
+          : 0,
+        paid: canViewAttendeeList ? items.filter((item) => item.paidAt != null).length : 0,
       },
+      access: owner
+        ? {
+            storedPlan: resolveEffectiveSubscriptionPlan(owner).storedPlan,
+            effectivePlan: resolveEffectiveSubscriptionPlan(owner).effectivePlan,
+            attendeeListUnlocked: canViewAttendeeList,
+            totalsUnlocked,
+            upgradeMessage: canViewAttendeeList
+              ? null
+              : canViewBasicTotals
+                ? 'Upgrade to SILVER to unlock attendee interaction and detailed attendee lists.'
+                : 'Upgrade to BRONZE to unlock RSVP tracking.',
+          }
+        : null,
     };
   }
 
@@ -492,6 +588,12 @@ export class EventsService implements OnModuleInit, OnModuleDestroy {
 
     if (payload.paymentLink !== undefined) {
       event.paymentLink = payload.paymentLink;
+    }
+
+    if (event.paymentRequired && !event.paymentLink?.trim()) {
+      throw new BadRequestException(
+        'Paid events must include a payment link or gateway before publishing.',
+      );
     }
 
     if (payload.venueName !== undefined) {

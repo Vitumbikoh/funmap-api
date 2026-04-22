@@ -5,7 +5,9 @@ import {
   IsInt,
   IsNumber,
   IsOptional,
+  IsArray,
   IsString,
+  IsUrl,
   IsUUID,
   Max,
   MaxLength,
@@ -63,4 +65,14 @@ export class CreatePromotionDto {
   @IsString()
   @MaxLength(100)
   audienceCountry?: string;
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  @MaxLength(40, { each: true })
+  externalPlatforms?: string[];
+
+  @IsOptional()
+  @IsUrl()
+  externalLandingUrl?: string;
 }

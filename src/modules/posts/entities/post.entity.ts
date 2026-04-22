@@ -2,6 +2,7 @@ import { Point } from 'geojson';
 import { Column, Entity, JoinColumn, ManyToOne } from 'typeorm';
 import { BaseEntity } from '../../../shared/database/base.entity';
 import { ContentVisibility } from '../../../shared/enums/content-visibility.enum';
+import { ContentType } from '../../../shared/enums/content-type.enum';
 import { User } from '../../users/entities/user.entity';
 
 @Entity({ name: 'posts' })
@@ -12,6 +13,9 @@ export class Post extends BaseEntity {
 
   @Column({ name: 'author_id', type: 'uuid' })
   authorId: string;
+
+  @Column({ name: 'content_type', type: 'enum', enum: ContentType, default: ContentType.POST })
+  contentType: ContentType;
 
   @Column({ type: 'text', nullable: true })
   caption?: string | null;
@@ -28,6 +32,9 @@ export class Post extends BaseEntity {
 
   @Column({ name: 'visibility_radius_km', type: 'float', default: 10 })
   visibilityRadiusKm: number;
+
+  @Column({ name: 'expires_at', type: 'timestamptz', nullable: true })
+  expiresAt?: Date | null;
 
   @Column({
     type: 'geography',

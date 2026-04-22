@@ -10,8 +10,9 @@ export class FeedController {
   constructor(private readonly feedService: FeedService) {}
 
   @Get('nearby')
-  getNearby(@Query() query: FeedQueryDto) {
-    return this.feedService.getNearbyFeed(query);
+  @UseGuards(JwtAuthGuard)
+  getNearby(@CurrentUser() user: JwtUser, @Query() query: FeedQueryDto) {
+    return this.feedService.getNearbyFeed(user.sub, query);
   }
 
   @Get('trending')
@@ -25,4 +26,3 @@ export class FeedController {
     return this.feedService.getFollowingFeed(user.sub, query);
   }
 }
-

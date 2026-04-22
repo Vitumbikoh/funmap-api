@@ -6,6 +6,7 @@ import { PaginationQueryDto } from '../../shared/dto/pagination-query.dto';
 import { NotificationType } from '../../shared/enums/notification-type.enum';
 import { JwtUser } from '../../shared/interfaces/jwt-user.interface';
 import { FcmService } from '../../shared/services/fcm.service';
+import { hasSubscriptionFeatureAccess } from '../../shared/services/subscription-access.service';
 import { Event } from '../events/entities/event.entity';
 import { User } from '../users/entities/user.entity';
 import { MarkNotificationsReadDto } from './dto/mark-notifications-read.dto';
@@ -316,6 +317,13 @@ export class NotificationsService implements OnModuleInit, OnModuleDestroy {
       };
     }
 
+    if (!hasSubscriptionFeatureAccess(user, 'fun_oclock_notifications')) {
+      return {
+        dispatched: false,
+        reason: 'Subscription tier does not allow Fun o\'clock notifications',
+      };
+    }
+
     if (!user.homeLocation?.coordinates || user.homeLocation.coordinates.length < 2) {
       return {
         dispatched: false,
@@ -445,4 +453,3 @@ export class NotificationsService implements OnModuleInit, OnModuleDestroy {
     return currentHour >= startHour || currentHour <= endHour;
   }
 }
-

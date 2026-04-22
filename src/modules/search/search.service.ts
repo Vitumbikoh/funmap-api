@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Event } from '../events/entities/event.entity';
@@ -6,6 +6,7 @@ import { Post } from '../posts/entities/post.entity';
 import { Reel } from '../reels/entities/reel.entity';
 import { User } from '../users/entities/user.entity';
 import { SearchQueryDto } from './dto/search-query.dto';
+import { resolveEffectiveSubscriptionPlan } from '../../shared/services/subscription-access.service';
 
 type DiscoverySection = 'users' | 'posts' | 'reels' | 'events' | 'hashtags';
 
@@ -22,7 +23,24 @@ export class SearchService {
     private readonly eventsRepository: Repository<Event>,
   ) {}
 
-  async discover(query: SearchQueryDto) {
+  async discover(userId: string, query: SearchQueryDto) {
+    const viewer = await this.usersRepository.findOne({
+      where: { id: userId },
+      select: {
+        id: true,
+        subscriptionPlan: true,
+        subscriptionExpiresAt: true,
+        township: true,
+        district: true,
+        region: true,
+        country: true,
+      },
+    });
+
+    if (!viewer) {
+      throw new NotFoundException('User not found');
+    }
+
     const term = (query.q ?? '').trim();
     const parsedLimit = Number(query.limit ?? 10);
     const limit = Number.isFinite(parsedLimit)
@@ -51,17 +69,17 @@ export class SearchService {
 
     const [users, hashtags, posts, reels, events] = await Promise.all([
       include.has('users')
-        ? this.searchUsers(term, limit, district, country)
+        ? this.searchUsers(term, limit, district, country, viewer)
         : Promise.resolve([]),
       include.has('hashtags') ? this.searchHashtags(term, limit) : Promise.resolve([]),
       include.has('posts')
-        ? this.searchPosts(term, limit, latitude, longitude, radiusKm, district, country)
+        ? this.searchPosts(term, limit, latitude, longitude, radiusKm, district, country, viewer)
         : Promise.resolve([]),
       include.has('reels')
-        ? this.searchReels(term, limit, latitude, longitude, radiusKm, district, country)
+        ? this.searchReels(term, limit, latitude, longitude, radiusKm, district, country, viewer)
         : Promise.resolve([]),
       include.has('events')
-        ? this.searchEvents(term, limit, latitude, longitude, radiusKm, district, country)
+        ? this.searchEvents(term, limit, latitude, longitude, radiusKm, district, country, viewer)
         : Promise.resolve([]),
     ]);
 
@@ -100,7 +118,7 @@ export class SearchService {
     return Number.isFinite(parsed) ? parsed : null;
   }
 
-  private async searchUsers(term: string, limit: number, district: string | null, country: string | null) {
+  private async searchUsers(term: string, limit: number, district: string | null, country: string | null, viewer: User) {
     const qb = this.usersRepository
       .createQueryBuilder('user')
       .select([
@@ -123,13 +141,7 @@ export class SearchService {
       .addOrderBy('user.updatedAt', 'DESC')
       .limit(limit);
 
-    if (district) {
-      qb.andWhere('user.district ILIKE :district', { district });
-    }
-
-    if (country) {
-      qb.andWhere('user.country ILIKE :country', { country });
-    }
+    this.applyLocationScopeToUserQuery(qb, district, country, viewer);
 
     return qb.getRawMany();
   }
@@ -164,6 +176,7 @@ export class SearchService {
     radiusKm: number,
     district: string | null,
     country: string | null,
+    viewer: User,
   ) {
     const hasGeo = latitude !== null && longitude !== null;
     const params: unknown[] = [`%${term}%`, limit];
@@ -171,15 +184,16 @@ export class SearchService {
       '(p.caption ILIKE $1 OR EXISTS (SELECT 1 FROM UNNEST(p.hashtags) tag WHERE tag ILIKE $1))',
     ];
 
-    if (district) {
-      params.push(district);
-      conditions.push(`p.district ILIKE $${params.length}`);
-    }
-
-    if (country) {
-      params.push(country);
-      conditions.push(`p.country ILIKE $${params.length}`);
-    }
+    this.applyLocationScopeToSqlConditions({
+      alias: 'p',
+      params,
+      conditions,
+      district,
+      country,
+      viewer,
+      supportsRegion: false,
+      supportsTownship: false,
+    });
 
     if (hasGeo) {
       params.push(longitude, latitude, radiusKm);
@@ -224,6 +238,7 @@ export class SearchService {
     radiusKm: number,
     _district: string | null,
     _country: string | null,
+    viewer: User,
   ) {
     const hasGeo = latitude !== null && longitude !== null;
     const params: unknown[] = [`%${term}%`, limit];
@@ -276,6 +291,7 @@ export class SearchService {
     radiusKm: number,
     district: string | null,
     country: string | null,
+    viewer: User,
   ) {
     const hasGeo = latitude !== null && longitude !== null;
     const params: unknown[] = [`%${term}%`, limit];
@@ -285,15 +301,16 @@ export class SearchService {
       'e.end_date >= NOW()',
     ];
 
-    if (district) {
-      params.push(district);
-      conditions.push(`e.district ILIKE $${params.length}`);
-    }
-
-    if (country) {
-      params.push(country);
-      conditions.push(`e.country ILIKE $${params.length}`);
-    }
+    this.applyLocationScopeToSqlConditions({
+      alias: 'e',
+      params,
+      conditions,
+      district,
+      country,
+      viewer,
+      supportsRegion: true,
+      supportsTownship: true,
+    });
 
     if (hasGeo) {
       params.push(longitude, latitude, radiusKm);
@@ -333,5 +350,69 @@ export class SearchService {
       `,
       params,
     );
+  }
+
+  private applyLocationScopeToUserQuery(
+    qb: any,
+    district: string | null,
+    country: string | null,
+    viewer: User,
+  ) {
+    const { effectivePlan } = resolveEffectiveSubscriptionPlan(viewer);
+
+    if (effectivePlan === 'LITE' && viewer.township?.trim()) {
+      qb.andWhere('user.township ILIKE :township', { township: viewer.township.trim() });
+      return;
+    }
+
+    if (effectivePlan === 'BRONZE' && (district ?? viewer.district?.trim())) {
+      qb.andWhere('user.district ILIKE :district', {
+        district: district ?? viewer.district?.trim(),
+      });
+      return;
+    }
+
+    if (effectivePlan === 'SILVER' && viewer.region?.trim()) {
+      qb.andWhere('user.region ILIKE :region', { region: viewer.region.trim() });
+      return;
+    }
+
+    qb.andWhere('user.country ILIKE :country', {
+      country: country ?? viewer.country?.trim() ?? '',
+    });
+  }
+
+  private applyLocationScopeToSqlConditions(options: {
+    alias: string;
+    params: unknown[];
+    conditions: string[];
+    district: string | null;
+    country: string | null;
+    viewer: User;
+    supportsRegion: boolean;
+    supportsTownship: boolean;
+  }) {
+    const { effectivePlan } = resolveEffectiveSubscriptionPlan(options.viewer);
+
+    if (effectivePlan === 'LITE' && options.supportsTownship && options.viewer.township?.trim()) {
+      options.params.push(options.viewer.township.trim());
+      options.conditions.push(`${options.alias}.township ILIKE $${options.params.length}`);
+      return;
+    }
+
+    if (effectivePlan === 'BRONZE' && (options.district ?? options.viewer.district?.trim())) {
+      options.params.push(options.district ?? options.viewer.district!.trim());
+      options.conditions.push(`${options.alias}.district ILIKE $${options.params.length}`);
+      return;
+    }
+
+    if (effectivePlan === 'SILVER' && options.supportsRegion && options.viewer.region?.trim()) {
+      options.params.push(options.viewer.region.trim());
+      options.conditions.push(`${options.alias}.region ILIKE $${options.params.length}`);
+      return;
+    }
+
+    options.params.push(options.country ?? options.viewer.country?.trim() ?? '');
+    options.conditions.push(`${options.alias}.country ILIKE $${options.params.length}`);
   }
 }

@@ -11,7 +11,6 @@ import { ChatRoomType } from '../../shared/enums/chat-room-type.enum';
 import { NotificationType } from '../../shared/enums/notification-type.enum';
 import { Role } from '../../shared/enums/role.enum';
 import { RsvpStatus } from '../../shared/enums/rsvp-status.enum';
-import { SubscriptionPlan } from '../../shared/enums/subscription-plan.enum';
 import { JwtUser } from '../../shared/interfaces/jwt-user.interface';
 import { Rsvp } from '../events/entities/rsvp.entity';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -23,6 +22,7 @@ import { ChatParticipant } from './entities/chat-participant.entity';
 import { ChatRoom } from './entities/chat-room.entity';
 import { Message } from './entities/message.entity';
 import { ChatGateway } from './chat.gateway';
+import { hasSubscriptionFeatureAccess } from '../../shared/services/subscription-access.service';
 
 @Injectable()
 export class ChatService {
@@ -707,10 +707,6 @@ export class ChatService {
       return false;
     }
 
-    return (
-      user.roles.includes(Role.CLIENT) &&
-      user.subscriptionPlan !== SubscriptionPlan.LITE
-    );
+    return user.roles.includes(Role.CLIENT) && hasSubscriptionFeatureAccess(user, 'direct_messaging');
   }
 }
-
