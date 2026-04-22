@@ -800,9 +800,19 @@ export class UsersService {
         eventTitle: item.event?.title,
         sourceType: normalizeText(item.metadata?.type as string | null | undefined) ?? (item.eventId ? 'event' : 'subscription'),
         label:
-          normalizeText(item.metadata?.type as string | null | undefined) === 'subscription'
-            ? `${normalizeText(item.metadata?.audience as string | null | undefined) ?? 'Subscription'} ${normalizeText(item.metadata?.plan as string | null | undefined) ?? 'plan'}`
-            : item.event?.title ?? 'Transaction',
+          (() => {
+            const sourceType = normalizeText(item.metadata?.type as string | null | undefined);
+
+            if (sourceType === 'subscription') {
+              return `${normalizeText(item.metadata?.audience as string | null | undefined) ?? 'Subscription'} ${normalizeText(item.metadata?.plan as string | null | undefined) ?? 'plan'}`;
+            }
+
+            if (sourceType === 'promotion') {
+              return 'Promotion purchase';
+            }
+
+            return item.event?.title ?? 'Transaction';
+          })(),
         createdAt: item.createdAt,
       }));
 
@@ -822,6 +832,7 @@ export class UsersService {
       user.roles?.includes(Role.BUSINESS) ||
       user.roles?.includes(Role.CAPITAL_USER) ||
       user.roles?.includes(Role.ADMIN);
+    const isAdmin = user.roles?.includes(Role.ADMIN) ?? false;
 
     const spendAgg = await this.paymentsRepository
       .createQueryBuilder('payment')
@@ -831,14 +842,27 @@ export class UsersService {
       .andWhere('payment.status = :status', { status: PaymentStatus.SUCCESS })
       .getRawOne<{ total: string; count: string }>();
 
-    const earningsAgg = await this.paymentsRepository
-      .createQueryBuilder('payment')
-      .innerJoin(Event, 'event', 'event.id = payment.eventId')
-      .select('COALESCE(SUM(payment.amount), 0)', 'total')
-      .addSelect('COUNT(*)', 'count')
-      .where('event.organizerId = :userId', { userId })
-      .andWhere('payment.status = :status', { status: PaymentStatus.SUCCESS })
-      .getRawOne<{ total: string; count: string }>();
+    const earningsAgg = isAdmin
+      ? await this.paymentsRepository
+          .createQueryBuilder('payment')
+          .select('COALESCE(SUM(payment.amount), 0)', 'total')
+          .addSelect('COUNT(*)', 'count')
+          .where('payment.status = :status', { status: PaymentStatus.SUCCESS })
+          .andWhere(
+            "COALESCE(payment.metadata->>'type', '') IN (:...types)",
+            {
+              types: ['promotion', 'subscription'],
+            },
+          )
+          .getRawOne<{ total: string; count: string }>()
+      : await this.paymentsRepository
+          .createQueryBuilder('payment')
+          .innerJoin(Event, 'event', 'event.id = payment.eventId')
+          .select('COALESCE(SUM(payment.amount), 0)', 'total')
+          .addSelect('COUNT(*)', 'count')
+          .where('event.organizerId = :userId', { userId })
+          .andWhere('payment.status = :status', { status: PaymentStatus.SUCCESS })
+          .getRawOne<{ total: string; count: string }>();
 
     const recentPayments = await this.paymentsRepository.find({
       where: { userId },
@@ -866,9 +890,19 @@ export class UsersService {
         eventTitle: item.event?.title,
         sourceType: normalizeText(item.metadata?.type as string | null | undefined) ?? (item.eventId ? 'event' : 'subscription'),
         label:
-          normalizeText(item.metadata?.type as string | null | undefined) === 'subscription'
-            ? `${normalizeText(item.metadata?.audience as string | null | undefined) ?? 'Subscription'} ${normalizeText(item.metadata?.plan as string | null | undefined) ?? 'plan'}`
-            : item.event?.title ?? 'Transaction',
+          (() => {
+            const sourceType = normalizeText(item.metadata?.type as string | null | undefined);
+
+            if (sourceType === 'subscription') {
+              return `${normalizeText(item.metadata?.audience as string | null | undefined) ?? 'Subscription'} ${normalizeText(item.metadata?.plan as string | null | undefined) ?? 'plan'}`;
+            }
+
+            if (sourceType === 'promotion') {
+              return 'Promotion purchase';
+            }
+
+            return item.event?.title ?? 'Transaction';
+          })(),
         createdAt: item.createdAt,
       })),
       bookingSummary: {

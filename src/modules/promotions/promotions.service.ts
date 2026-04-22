@@ -7,7 +7,9 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, LessThanOrEqual, Repository } from 'typeorm';
 import { JwtUser } from '../../shared/interfaces/jwt-user.interface';
+import { PaymentStatus } from '../../shared/enums/payment-status.enum';
 import { Event } from '../events/entities/event.entity';
+import { Payment } from '../payments/entities/payment.entity';
 import { Post } from '../posts/entities/post.entity';
 import { Reel } from '../reels/entities/reel.entity';
 import { CreatePromotionDto } from './dto/create-promotion.dto';
@@ -22,6 +24,8 @@ export class PromotionsService {
   constructor(
     @InjectRepository(Promotion)
     private readonly promotionsRepository: Repository<Promotion>,
+    @InjectRepository(Payment)
+    private readonly paymentsRepository: Repository<Payment>,
     @InjectRepository(Post)
     private readonly postsRepository: Repository<Post>,
     @InjectRepository(Event)
@@ -59,7 +63,29 @@ export class PromotionsService {
       status,
     });
 
-    return this.promotionsRepository.save(promotion);
+    const savedPromotion = await this.promotionsRepository.save(promotion);
+
+    await this.paymentsRepository.save(
+      this.paymentsRepository.create({
+        userId: user.sub,
+        eventId: null,
+        amount: savedPromotion.budgetAmount,
+        currency: savedPromotion.currency,
+        provider: 'FUNMAP_PROMOTIONS',
+        reference: `promotion_${savedPromotion.id}`,
+        providerReference: `promotion_${savedPromotion.id}`,
+        checkoutUrl: null,
+        status: PaymentStatus.SUCCESS,
+        metadata: {
+          type: 'promotion',
+          targetType: savedPromotion.targetType,
+          targetId: savedPromotion.targetId,
+          promotionId: savedPromotion.id,
+        },
+      }),
+    );
+
+    return savedPromotion;
   }
 
   async listMine(user: JwtUser, query: ListPromotionsQueryDto) {

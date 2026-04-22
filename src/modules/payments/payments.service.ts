@@ -317,6 +317,8 @@ export class PaymentsService {
           sourceLabel:
             sourceType === 'subscription'
               ? `${audience ?? 'Subscription'} ${plan ?? 'plan'}`
+              : sourceType === 'promotion'
+                ? 'Promotion purchase'
               : (item.eventTitle?.toString() ?? 'Event payment'),
           payer: {
             id: item.userId,
