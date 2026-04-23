@@ -130,7 +130,11 @@ export class PostsService implements OnModuleInit, OnModuleDestroy {
           u.username AS "authorUsername",
           u.avatar_url AS "authorAvatarUrl",
           u.roles AS "authorRoles",
-          u.is_verified AS "authorVerified",
+          CASE
+            WHEN ('BUSINESS' = ANY(u.roles) OR 'CAPITAL_USER' = ANY(u.roles))
+              THEN u.business_verification_status = 'VERIFIED'
+            ELSE u.national_id_status = 'VERIFIED'
+          END AS "authorVerified",
           ST_Distance(
             p.location,
             ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography

@@ -78,7 +78,6 @@ export class EngagementService {
         user.sub,
         targetMeta.ownerUserId,
         `${targetType.toLowerCase()}_liked`,
-        'Your content received a new like.',
         {
           targetType,
           targetId,
@@ -161,11 +160,11 @@ export class EngagementService {
       user.sub,
       targetMeta.ownerUserId,
       `${targetType.toLowerCase()}_commented`,
-      'Your content received a new comment.',
       {
         targetType,
         targetId,
         commentId: saved.id,
+        commentBody: saved.body,
       },
     );
 
@@ -270,7 +269,6 @@ export class EngagementService {
       user.sub,
       targetMeta.ownerUserId,
       `${targetType.toLowerCase()}_shared`,
-      'Your content was shared.',
       {
         targetType,
         targetId,
@@ -424,24 +422,135 @@ export class EngagementService {
     actorUserId: string,
     ownerUserId: string,
     action: string,
-    message: string,
     payload: Record<string, unknown>,
   ) {
     if (actorUserId === ownerUserId) {
       return;
     }
 
+    const actor = await this.usersRepository.findOne({
+      where: { id: actorUserId },
+      select: {
+        id: true,
+        displayName: true,
+        username: true,
+      },
+    });
+    const actorName = actor?.displayName ?? actor?.username ?? 'Someone';
+    const targetType = payload['targetType']?.toString().toUpperCase() ?? 'CONTENT';
+    const targetId = payload['targetId']?.toString() ?? '';
+    const details = await this.buildTargetNotificationDetails(targetType, targetId);
+
+    const content = this.buildEngagementNotificationContent(
+      actorName,
+      action,
+      details,
+      payload['commentBody']?.toString(),
+    );
+
     await this.notificationsService.createNotification(
       ownerUserId,
       NotificationType.SOCIAL,
-      'New engagement',
-      message,
+      content.title,
+      content.body,
       {
         action,
         actorUserId,
         ...payload,
       },
     );
+  }
+
+  private buildEngagementNotificationContent(
+    actorName: string,
+    action: string,
+    details: { noun: string; label: string },
+    commentBody?: string | null,
+  ) {
+    const compactComment = this.compact(commentBody, 80);
+
+    switch (action) {
+      case 'event_liked':
+      case 'post_liked':
+      case 'reel_liked':
+        return {
+          title: 'New like',
+          body: `${actorName} liked your ${details.noun}: ${details.label}`,
+        };
+      case 'event_commented':
+      case 'post_commented':
+      case 'reel_commented':
+        return {
+          title: 'New comment',
+          body:
+            compactComment == null
+              ? `${actorName} commented on your ${details.noun}: ${details.label}`
+              : `${actorName} commented on your ${details.noun}: "${compactComment}"`,
+        };
+      case 'event_shared':
+      case 'post_shared':
+      case 'reel_shared':
+        return {
+          title: 'Content shared',
+          body: `${actorName} shared your ${details.noun}: ${details.label}`,
+        };
+      default:
+        return {
+          title: 'New engagement',
+          body: `${actorName} interacted with your ${details.noun}: ${details.label}`,
+        };
+    }
+  }
+
+  private async buildTargetNotificationDetails(targetType: string, targetId: string) {
+    if (targetType == ContentTarget.EVENT && targetId.isNotEmpty) {
+      const event = await this.eventsRepository.findOne({
+        where: { id: targetId },
+        select: { id: true, title: true },
+      });
+      return {
+        noun: 'event',
+        label: event?.title ?? 'your event',
+      };
+    }
+
+    if (targetType == ContentTarget.POST && targetId.isNotEmpty) {
+      const post = await this.postsRepository.findOne({
+        where: { id: targetId },
+        select: { id: true, caption: true },
+      });
+      return {
+        noun: 'post',
+        label: this.compact(post?.caption, 60) ?? 'your post',
+      };
+    }
+
+    if (targetType == ContentTarget.REEL && targetId.isNotEmpty) {
+      const reel = await this.reelsRepository.findOne({
+        where: { id: targetId },
+        select: { id: true, caption: true },
+      });
+      return {
+        noun: 'reel',
+        label: this.compact(reel?.caption, 60) ?? 'your reel',
+      };
+    }
+
+    return {
+      noun: 'content',
+      label: 'your content',
+    };
+  }
+
+  private compact(value?: string | null, maxLength = 60) {
+    const normalized = value?.trim();
+    if (normalized == null || normalized.isEmpty) {
+      return null;
+    }
+
+    return normalized.length <= maxLength
+      ? normalized
+      : `${normalized.slice(0, maxLength - 1)}…`;
   }
 
   private async assertCommentUnlocked(

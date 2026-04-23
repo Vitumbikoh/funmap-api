@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { Event } from '../events/entities/event.entity';
 import { Rsvp } from '../events/entities/rsvp.entity';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { User } from '../users/entities/user.entity';
@@ -18,6 +19,7 @@ import { Message } from './entities/message.entity';
       ChatParticipant,
       ChatRequest,
       Message,
+      Event,
       Rsvp,
       User,
     ]),

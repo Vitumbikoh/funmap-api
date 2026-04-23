@@ -143,7 +143,11 @@ export class FeedService {
             COALESCE(NULLIF(post_author.business_name, ''), NULLIF(post_author.display_name, ''), NULLIF(post_author.username, ''), 'FunMap User') AS "authorName",
             post_author.avatar_url AS "authorAvatarUrl",
             post_author.roles AS "authorRoles",
-            post_author.is_verified AS "authorVerified",
+            CASE
+              WHEN ('BUSINESS' = ANY(post_author.roles) OR 'CAPITAL_USER' = ANY(post_author.roles))
+                THEN post_author.business_verification_status = 'VERIFIED'
+              ELSE post_author.national_id_status = 'VERIFIED'
+            END AS "authorVerified",
             p.like_count AS "likeCount",
             p.comment_count AS "commentCount",
             p.share_count AS "shareCount",
@@ -186,7 +190,11 @@ export class FeedService {
             COALESCE(NULLIF(reel_author.business_name, ''), NULLIF(reel_author.display_name, ''), NULLIF(reel_author.username, ''), 'FunMap User') AS "authorName",
             reel_author.avatar_url AS "authorAvatarUrl",
             reel_author.roles AS "authorRoles",
-            reel_author.is_verified AS "authorVerified",
+            CASE
+              WHEN ('BUSINESS' = ANY(reel_author.roles) OR 'CAPITAL_USER' = ANY(reel_author.roles))
+                THEN reel_author.business_verification_status = 'VERIFIED'
+              ELSE reel_author.national_id_status = 'VERIFIED'
+            END AS "authorVerified",
             r.like_count AS "likeCount",
             r.comment_count AS "commentCount",
             r.share_count AS "shareCount",
@@ -219,7 +227,11 @@ export class FeedService {
             COALESCE(NULLIF(event_author.business_name, ''), NULLIF(event_author.display_name, ''), NULLIF(event_author.username, ''), NULLIF(e.venue_name, ''), 'FunMap User') AS "authorName",
             event_author.avatar_url AS "authorAvatarUrl",
             event_author.roles AS "authorRoles",
-            event_author.is_verified AS "authorVerified",
+            CASE
+              WHEN ('BUSINESS' = ANY(event_author.roles) OR 'CAPITAL_USER' = ANY(event_author.roles))
+                THEN event_author.business_verification_status = 'VERIFIED'
+              ELSE event_author.national_id_status = 'VERIFIED'
+            END AS "authorVerified",
             COALESCE(event_like_count.value, 0) AS "likeCount",
             COALESCE(event_comment_count.value, 0) AS "commentCount",
             COALESCE(event_share_count.value, 0) AS "shareCount",
@@ -330,7 +342,11 @@ export class FeedService {
             COALESCE(NULLIF(post_author.business_name, ''), NULLIF(post_author.display_name, ''), NULLIF(post_author.username, ''), 'FunMap User') AS "authorName",
             post_author.avatar_url AS "authorAvatarUrl",
             post_author.roles AS "authorRoles",
-            post_author.is_verified AS "authorVerified",
+            CASE
+              WHEN ('BUSINESS' = ANY(post_author.roles) OR 'CAPITAL_USER' = ANY(post_author.roles))
+                THEN post_author.business_verification_status = 'VERIFIED'
+              ELSE post_author.national_id_status = 'VERIFIED'
+            END AS "authorVerified",
             p.like_count AS "likeCount",
             p.comment_count AS "commentCount",
             p.share_count AS "shareCount",
@@ -364,7 +380,11 @@ export class FeedService {
             COALESCE(NULLIF(reel_author.business_name, ''), NULLIF(reel_author.display_name, ''), NULLIF(reel_author.username, ''), 'FunMap User') AS "authorName",
             reel_author.avatar_url AS "authorAvatarUrl",
             reel_author.roles AS "authorRoles",
-            reel_author.is_verified AS "authorVerified",
+            CASE
+              WHEN ('BUSINESS' = ANY(reel_author.roles) OR 'CAPITAL_USER' = ANY(reel_author.roles))
+                THEN reel_author.business_verification_status = 'VERIFIED'
+              ELSE reel_author.national_id_status = 'VERIFIED'
+            END AS "authorVerified",
             r.like_count AS "likeCount",
             r.comment_count AS "commentCount",
             r.share_count AS "shareCount",
@@ -400,7 +420,11 @@ export class FeedService {
             COALESCE(NULLIF(event_author.business_name, ''), NULLIF(event_author.display_name, ''), NULLIF(event_author.username, ''), NULLIF(e.venue_name, ''), 'FunMap User') AS "authorName",
             event_author.avatar_url AS "authorAvatarUrl",
             event_author.roles AS "authorRoles",
-            event_author.is_verified AS "authorVerified",
+            CASE
+              WHEN ('BUSINESS' = ANY(event_author.roles) OR 'CAPITAL_USER' = ANY(event_author.roles))
+                THEN event_author.business_verification_status = 'VERIFIED'
+              ELSE event_author.national_id_status = 'VERIFIED'
+            END AS "authorVerified",
             COALESCE(event_like_count.value, 0) AS "likeCount",
             COALESCE(event_comment_count.value, 0) AS "commentCount",
             COALESCE(event_share_count.value, 0) AS "shareCount",

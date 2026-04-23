@@ -12,6 +12,7 @@ import { NotificationType } from '../../shared/enums/notification-type.enum';
 import { Role } from '../../shared/enums/role.enum';
 import { RsvpStatus } from '../../shared/enums/rsvp-status.enum';
 import { JwtUser } from '../../shared/interfaces/jwt-user.interface';
+import { Event } from '../events/entities/event.entity';
 import { Rsvp } from '../events/entities/rsvp.entity';
 import { NotificationsService } from '../notifications/notifications.service';
 import { User } from '../users/entities/user.entity';
@@ -37,6 +38,8 @@ export class ChatService {
     private readonly messagesRepository: Repository<Message>,
     @InjectRepository(Rsvp)
     private readonly rsvpRepository: Repository<Rsvp>,
+    @InjectRepository(Event)
+    private readonly eventsRepository: Repository<Event>,
     @InjectRepository(User)
     private readonly usersRepository: Repository<User>,
     private readonly chatGateway: ChatGateway,
@@ -240,6 +243,18 @@ export class ChatService {
   }
 
   async joinEventRoom(user: JwtUser, eventId: string) {
+    const event = await this.eventsRepository.findOne({
+      where: { id: eventId },
+      select: {
+        id: true,
+        title: true,
+      },
+    });
+
+    if (!event) {
+      throw new NotFoundException('Event not found');
+    }
+
     const rsvp = await this.rsvpRepository.findOne({
       where: {
         eventId,
@@ -263,10 +278,13 @@ export class ChatService {
         this.roomsRepository.create({
           type: ChatRoomType.EVENT,
           eventId,
-          title: 'Event Chat',
+          title: '${event.title} Chat',
           createdByUserId: user.sub,
         }),
       );
+    } else if (room.title?.trim() != '${event.title} Chat') {
+      room.title = '${event.title} Chat';
+      room = await this.roomsRepository.save(room);
     }
 
     const existingParticipant = await this.participantsRepository.findOne({
@@ -300,7 +318,8 @@ export class ChatService {
           cr.updated_at AS "updatedAt",
           cr.last_message_at AS "lastMessageAt",
           CASE
-            WHEN cr.type = 'PRIVATE' THEN COALESCE(other_user.username, other_user.display_name, 'Private Chat')
+            WHEN cr.type = 'PRIVATE' THEN COALESCE(other_user.display_name, other_user.username, 'Private Chat')
+            WHEN cr.type = 'EVENT' THEN COALESCE(NULLIF(cr.title, ''), CONCAT(COALESCE(event.title, 'Event'), ' Chat'))
             ELSE COALESCE(cr.title, 'Chat Room')
           END AS title,
           cp.last_read_at AS "lastReadAt",
@@ -321,6 +340,7 @@ export class ChatService {
             AND cp_other.user_id <> $1
           LIMIT 1
         ) other_user ON TRUE
+        LEFT JOIN events event ON event.id = cr.event_id
         LEFT JOIN messages m ON m.room_id = cr.id
         WHERE cp.user_id = $1
         GROUP BY
@@ -334,7 +354,8 @@ export class ChatService {
           cr.title,
           cp.last_read_at,
           other_user.display_name,
-          other_user.username
+          other_user.username,
+          event.title
         ORDER BY cr.last_message_at DESC NULLS LAST, cr.created_at DESC
       `,
       [user.sub],
@@ -356,7 +377,7 @@ export class ChatService {
           m.metadata,
           m.created_at AS "createdAt",
           m.updated_at AS "updatedAt",
-          COALESCE(u.username, u.display_name, 'FunMap user') AS "senderName",
+          COALESCE(u.display_name, u.username, 'FunMap user') AS "senderName",
           u.username AS "senderUsername",
           u.avatar_url AS "senderAvatarUrl"
         FROM messages m
@@ -402,7 +423,7 @@ export class ChatService {
 
     const enrichedMessage = {
       ...savedMessage,
-      senderName: sender?.username ?? sender?.displayName ?? 'FunMap user',
+      senderName: sender?.displayName ?? sender?.username ?? 'FunMap user',
       senderUsername: sender?.username ?? null,
       senderAvatarUrl: sender?.avatarUrl ?? null,
     };
@@ -437,10 +458,15 @@ export class ChatService {
         this.notificationsService.createNotification(
           recipient.userId,
           NotificationType.CHAT,
-          room.type === ChatRoomType.EVENT ? 'New event message' : 'New message',
-          payload.body?.slice(0, 160) ?? 'You received a media message.',
+          room.type === ChatRoomType.EVENT
+            ? 'New message in ${room.title ?? 'Event chat'}'
+            : 'New message from ${sender?.displayName ?? sender?.username ?? 'FunMap user'}',
+          room.type === ChatRoomType.EVENT
+            ? '${sender?.displayName ?? sender?.username ?? 'Someone'}: ${payload.body?.slice(0, 160) ?? 'Sent a media message.'}'
+            : payload.body?.slice(0, 160) ?? 'You received a media message.',
           {
             roomId,
+            roomTitle: room.title ?? 'Chat Room',
             messageId: savedMessage.id,
             senderId: user.sub,
             eventId: room.eventId,

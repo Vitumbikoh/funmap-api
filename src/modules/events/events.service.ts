@@ -12,6 +12,7 @@ import { Point } from 'geojson';
 import { Repository } from 'typeorm';
 import { EventLifecycleStatus } from '../../shared/enums/event-lifecycle-status.enum';
 import { EventCategory } from '../../shared/enums/event-category.enum';
+import { NotificationType } from '../../shared/enums/notification-type.enum';
 import { Role } from '../../shared/enums/role.enum';
 import { RsvpStatus } from '../../shared/enums/rsvp-status.enum';
 import { JwtUser } from '../../shared/interfaces/jwt-user.interface';
@@ -30,6 +31,7 @@ import { UpdateEventDto } from './dto/update-event.dto';
 import { Event } from './entities/event.entity';
 import { Rsvp } from './entities/rsvp.entity';
 import { User } from '../users/entities/user.entity';
+import { NotificationsService } from '../notifications/notifications.service';
 
 type EventListItem = Record<string, unknown>;
 type AttendeeItem = Record<string, unknown>;
@@ -46,6 +48,7 @@ export class EventsService implements OnModuleInit, OnModuleDestroy {
     private readonly rsvpRepository: Repository<Rsvp>,
     @InjectRepository(User)
     private readonly usersRepository: Repository<User>,
+    private readonly notificationsService: NotificationsService,
   ) {}
 
   onModuleInit() {
@@ -466,13 +469,14 @@ export class EventsService implements OnModuleInit, OnModuleDestroy {
 
   async rsvp(user: JwtUser, eventId: string) {
     const event = await this.findOne(eventId);
-
-    let rsvp = await this.rsvpRepository.findOne({
+    const alreadyHadBooking = await this.rsvpRepository.findOne({
       where: {
         eventId,
         userId: user.sub,
       },
     });
+
+    let rsvp = alreadyHadBooking;
 
     if (!rsvp) {
       rsvp = this.rsvpRepository.create({
@@ -496,6 +500,52 @@ export class EventsService implements OnModuleInit, OnModuleDestroy {
     if (!event.paymentRequired && !wasConfirmed) {
       event.rsvpCount += 1;
       await this.eventsRepository.save(event);
+    }
+
+    if (!alreadyHadBooking) {
+      await this.notificationsService.createNotification(
+        user.sub,
+        NotificationType.EVENT,
+        event.paymentRequired ? 'RSVP saved' : 'RSVP confirmed',
+        event.paymentRequired
+          ? `You have successfully RSVP’d to ${event.title}. Complete payment to unlock chat and comments.`
+          : `You have successfully RSVP’d to ${event.title}.`,
+        {
+          action: 'RSVP_CREATED',
+          eventId: event.id,
+          eventTitle: event.title,
+          status: savedRsvp.status,
+        },
+      );
+    }
+
+    if (!alreadyHadBooking && event.organizerId && event.organizerId !== user.sub) {
+      const attendee = await this.usersRepository.findOne({
+        where: { id: user.sub },
+        select: {
+          id: true,
+          displayName: true,
+          username: true,
+        },
+      });
+
+      final attendeeName =
+          attendee?.displayName ?? attendee?.username ?? 'A user';
+
+      await this.notificationsService.createNotification(
+        event.organizerId,
+        NotificationType.EVENT,
+        `New RSVP for ${event.title}`,
+        `${attendeeName} has RSVP’d to your event: ${event.title}`,
+        {
+          action: 'EVENT_RSVP',
+          actorUserId: user.sub,
+          eventId: event.id,
+          eventTitle: event.title,
+          targetType: 'EVENT',
+          targetId: event.id,
+        },
+      );
     }
 
     return savedRsvp;

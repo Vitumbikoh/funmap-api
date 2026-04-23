@@ -8,6 +8,7 @@ import { JwtUser } from '../../shared/interfaces/jwt-user.interface';
 import { FcmService } from '../../shared/services/fcm.service';
 import { hasSubscriptionFeatureAccess } from '../../shared/services/subscription-access.service';
 import { Event } from '../events/entities/event.entity';
+import { ChatRoom } from '../chat/entities/chat-room.entity';
 import { User } from '../users/entities/user.entity';
 import { MarkNotificationsReadDto } from './dto/mark-notifications-read.dto';
 import { RegisterDeviceDto } from './dto/register-device.dto';
@@ -28,6 +29,8 @@ export class NotificationsService implements OnModuleInit, OnModuleDestroy {
     private readonly usersRepository: Repository<User>,
     @InjectRepository(Event)
     private readonly eventsRepository: Repository<Event>,
+    @InjectRepository(ChatRoom)
+    private readonly chatRoomsRepository: Repository<ChatRoom>,
     private readonly fcmService: FcmService,
     private readonly configService: AppConfigService,
   ) {}
@@ -103,9 +106,15 @@ export class NotificationsService implements OnModuleInit, OnModuleDestroy {
     ]);
 
     const actorIds = new Set<string>();
+    const eventIds = new Set<string>();
+    const roomIds = new Set<string>();
     for (const item of items) {
       const actorId = item.payload?.['actorUserId']?.toString();
       if (actorId) actorIds.add(actorId);
+      const eventId = item.payload?.['eventId']?.toString();
+      if (eventId) eventIds.add(eventId);
+      const roomId = item.payload?.['roomId']?.toString();
+      if (roomId) roomIds.add(roomId);
     }
 
     const actors = actorIds.size
@@ -116,6 +125,25 @@ export class NotificationsService implements OnModuleInit, OnModuleDestroy {
             displayName: true,
             username: true,
             avatarUrl: true,
+          },
+        })
+      : [];
+    const events = eventIds.size
+      ? await this.eventsRepository.find({
+          where: { id: In(Array.from(eventIds)) },
+          select: {
+            id: true,
+            title: true,
+          },
+        })
+      : [];
+    const rooms = roomIds.size
+      ? await this.chatRoomsRepository.find({
+          where: { id: In(Array.from(roomIds)) },
+          select: {
+            id: true,
+            title: true,
+            eventId: true,
           },
         })
       : [];
@@ -131,11 +159,23 @@ export class NotificationsService implements OnModuleInit, OnModuleDestroy {
         },
       ]),
     );
+    const eventMap = new Map(events.map((event) => [event.id, event]));
+    const roomMap = new Map(rooms.map((room) => [room.id, room]));
 
     const mapped = items.map((item) => {
       const payload = item.payload ?? {};
       const actorId = payload['actorUserId']?.toString();
       const actor = actorId ? actorMap.get(actorId) : null;
+      const eventId = payload['eventId']?.toString() ?? null;
+      const roomId = payload['roomId']?.toString() ?? null;
+      const room = roomId ? roomMap.get(roomId) : null;
+      const targetId = payload['targetId']?.toString() ?? null;
+      const resolvedEventId =
+        eventId ??
+        ((payload['targetType']?.toString()?.toUpperCase() == 'EVENT')
+            ? targetId
+            : null);
+      const event = resolvedEventId ? eventMap.get(resolvedEventId) : null;
 
       return {
         id: item.id,
@@ -147,7 +187,11 @@ export class NotificationsService implements OnModuleInit, OnModuleDestroy {
         actor,
         action: payload['action']?.toString(),
         targetType: payload['targetType']?.toString(),
-        targetId: payload['targetId']?.toString(),
+        targetId,
+        eventId: resolvedEventId,
+        eventTitle: event?.title ?? payload['eventTitle']?.toString(),
+        roomId,
+        roomTitle: room?.title ?? payload['roomTitle']?.toString(),
       };
     });
 
@@ -161,6 +205,10 @@ export class NotificationsService implements OnModuleInit, OnModuleDestroy {
         .filter((n) => n.type?.toString().toUpperCase() === 'EVENT'),
       payments: mapped
         .filter((n) => n.type?.toString().toUpperCase() === 'PAYMENT'),
+      chats: mapped
+        .filter((n) => n.type?.toString().toUpperCase() === 'CHAT'),
+      system: mapped
+        .filter((n) => n.type?.toString().toUpperCase() === 'SYSTEM'),
     };
   }
 

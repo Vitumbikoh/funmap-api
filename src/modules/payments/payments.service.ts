@@ -716,6 +716,8 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
           status: result.status,
         },
       );
+
+      await this.notifyOrganizerAboutEventPayment(result);
     }
 
     return { received: true, status: result.status, idempotent: result.idempotent };
@@ -734,6 +736,25 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
       if (syncResult) {
         resolvedStatus = syncResult.status;
         eventId = syncResult.eventId;
+        if (syncResult.statusChanged) {
+          await this.notificationsService.createNotification(
+            syncResult.userId,
+            NotificationType.PAYMENT,
+            syncResult.status === PaymentStatus.SUCCESS
+              ? 'Payment confirmed'
+              : 'Payment update',
+            syncResult.status === PaymentStatus.SUCCESS
+              ? 'Your payment was verified and event access is now unlocked.'
+              : 'Your payment was not successful. Please try again.',
+            {
+              paymentId: syncResult.paymentId,
+              eventId: syncResult.eventId,
+              status: syncResult.status,
+            },
+          );
+
+          await this.notifyOrganizerAboutEventPayment(syncResult);
+        }
       }
     }
 
@@ -762,7 +783,13 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
     txRef: string,
     source: 'callback' | 'return',
     status?: string,
-  ): Promise<{ status: string; eventId: string | null } | null> {
+  ): Promise<{
+    status: string;
+    eventId: string | null;
+    paymentId: string | null;
+    userId: string;
+    statusChanged: boolean;
+  } | null> {
     const safeTxRef = txRef.trim();
     if (!safeTxRef) {
       return null;
@@ -838,6 +865,9 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
         return {
           status: PaymentStatus.SUCCESS,
           eventId: null,
+          paymentId: subscriptionPayment.id,
+          userId: user.id,
+          statusChanged: previousPlan !== subscriptionActivation.plan,
         };
       }
 
@@ -857,6 +887,9 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
         return {
           status: payment.status,
           eventId: payment.eventId,
+          paymentId: payment.id,
+          userId: payment.userId,
+          statusChanged: false,
         };
       }
 
@@ -969,6 +1002,9 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
       return {
         status: payment.status,
         eventId: payment.eventId,
+        paymentId: payment.id,
+        userId: payment.userId,
+        statusChanged: previousStatus !== nextStatus,
       };
     });
 
@@ -979,7 +1015,62 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
     return {
       status: updated.status,
       eventId: updated.eventId ?? null,
+      paymentId: updated.paymentId,
+      userId: updated.userId,
+      statusChanged: updated.statusChanged,
     };
+  }
+
+  private async notifyOrganizerAboutEventPayment(result: {
+    eventId: string | null;
+    status: string;
+    paymentId: string | null;
+    userId: string;
+  }) {
+    if (result.status !== PaymentStatus.SUCCESS || result.eventId == null) {
+      return;
+    }
+
+    const [event, payer] = await Promise.all([
+      this.eventsRepository.findOne({
+        where: { id: result.eventId },
+        select: {
+          id: true,
+          title: true,
+          organizerId: true,
+        },
+      }),
+      this.usersRepository.findOne({
+        where: { id: result.userId },
+        select: {
+          id: true,
+          displayName: true,
+          username: true,
+        },
+      }),
+    ]);
+
+    if (!event || event.organizerId === result.userId) {
+      return;
+    }
+
+    const payerName = payer?.displayName ?? payer?.username ?? 'A user';
+
+    await this.notificationsService.createNotification(
+      event.organizerId,
+      NotificationType.PAYMENT,
+      `New payment for ${event.title}`,
+      `${payerName} has paid for your event: ${event.title}`,
+      {
+        action: 'EVENT_PAYMENT_CONFIRMED',
+        actorUserId: result.userId,
+        paymentId: result.paymentId,
+        eventId: event.id,
+        eventTitle: event.title,
+        targetType: 'EVENT',
+        targetId: event.id,
+      },
+    );
   }
 
   private buildMobilePaymentDeepLink(

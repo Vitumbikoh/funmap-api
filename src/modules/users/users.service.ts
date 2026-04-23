@@ -89,6 +89,8 @@ export class UsersService {
         bio: true,
         roles: true,
         isVerified: true,
+        businessVerificationStatus: true,
+        nationalIdStatus: true,
         township: true,
         district: true,
         region: true,
@@ -1048,6 +1050,7 @@ export class UsersService {
     const { passwordHash, ...safeUser } = user;
     return {
       ...safeUser,
+      verifiedBadge: this.resolveVerifiedBadge(user),
       subscriptionAccess: buildSubscriptionAccessPayload(user),
     };
   }
@@ -1065,6 +1068,8 @@ export class UsersService {
       | 'bio'
       | 'roles'
       | 'isVerified'
+      | 'businessVerificationStatus'
+      | 'nationalIdStatus'
       | 'township'
       | 'district'
       | 'region'
@@ -1086,11 +1091,31 @@ export class UsersService {
       businessCategory: user.businessCategory ?? null,
       roles: user.roles ?? [],
       isVerified: user.isVerified,
+      verifiedBadge: this.resolveVerifiedBadge(user),
       township: user.township ?? null,
       district: user.district ?? null,
       region: user.region ?? null,
       country: user.country ?? null,
     };
+  }
+
+  private resolveVerifiedBadge(
+    user: Pick<
+      User,
+      | 'roles'
+      | 'businessVerificationStatus'
+      | 'nationalIdStatus'
+    >,
+  ) {
+    const roles = user.roles ?? [];
+    const isCapitalUser =
+      roles.includes(Role.BUSINESS) || roles.includes(Role.CAPITAL_USER);
+
+    if (isCapitalUser) {
+      return user.businessVerificationStatus === BusinessVerificationStatus.VERIFIED;
+    }
+
+    return user.nationalIdStatus === NationalIdStatus.VERIFIED;
   }
 
   private buildDeletedPhonePlaceholder(userId: string) {
