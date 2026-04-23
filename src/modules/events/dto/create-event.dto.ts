@@ -1,0 +1,137 @@
+import { Transform, Type } from 'class-transformer';
+import {
+  ArrayMaxSize,
+  IsArray,
+  IsBoolean,
+  IsDateString,
+  IsEnum,
+  IsLatitude,
+  IsLongitude,
+  IsOptional,
+  IsString,
+  IsUrl,
+  IsUUID,
+  MaxLength,
+  Min,
+} from 'class-validator';
+import { EventCategory } from '../../../shared/enums/event-category.enum';
+import { EventLifecycleStatus } from '../../../shared/enums/event-lifecycle-status.enum';
+import { MoodTag } from '../../../shared/enums/mood-tag.enum';
+
+export class CreateEventDto {
+  @IsString()
+  @MaxLength(150)
+  title: string;
+
+  @IsString()
+  @MaxLength(4000)
+  description: string;
+
+  @IsArray()
+  @ArrayMaxSize(10)
+  @IsUUID('4', { each: true })
+  mediaIds: string[];
+
+  @IsDateString()
+  startDate: string;
+
+  @IsDateString()
+  endDate: string;
+
+  @Transform(({ value }) => normalizeCategory(value))
+  @IsEnum(EventCategory)
+  category: EventCategory;
+
+  @IsOptional()
+  @Transform(({ value }) => normalizeMoodTag(value))
+  @IsEnum(MoodTag)
+  moodTag?: MoodTag;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(12)
+  @IsString({ each: true })
+  hashtags?: string[];
+
+  @Type(() => Number)
+  @Min(0)
+  ticketPrice: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @Min(1)
+  capacity?: number;
+
+  @IsBoolean()
+  paymentRequired: boolean;
+
+  @IsOptional()
+  @IsUrl()
+  paymentLink?: string;
+
+  @IsOptional()
+  @IsEnum(EventLifecycleStatus)
+  status?: EventLifecycleStatus;
+
+  @Type(() => Number)
+  @IsLatitude()
+  latitude: number;
+
+  @Type(() => Number)
+  @IsLongitude()
+  longitude: number;
+
+  @IsString()
+  venueName: string;
+
+  @IsOptional()
+  @IsString()
+  township?: string;
+
+  @IsOptional()
+  @IsString()
+  district?: string;
+
+  @IsOptional()
+  @IsString()
+  region?: string;
+
+  @IsOptional()
+  @IsString()
+  country?: string;
+}
+
+function normalizeCategory(value: unknown): EventCategory {
+  const normalized = normalizeText(value)?.toUpperCase();
+  if (normalized === 'DINING') {
+    return EventCategory.FOOD;
+  }
+
+  return (normalized ?? value) as EventCategory;
+}
+
+function normalizeText(value: unknown): string | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  return trimmed.length ? trimmed : undefined;
+}
+
+function normalizeMoodTag(value: unknown): MoodTag | undefined {
+  const normalized = normalizeText(value)
+    ?.toUpperCase()
+    .replaceAll('_', '-')
+    .replaceAll(' ', '-');
+
+  if (!normalized) {
+    return undefined;
+  }
+
+  if (normalized == 'RNB') {
+    return MoodTag.RNB;
+  }
+
+  return normalized as MoodTag;
+}

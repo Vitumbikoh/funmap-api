@@ -1,0 +1,11 @@
+export enum EventCategory {
+  NIGHTLIFE = 'NIGHTLIFE',
+  FOOD = 'FOOD',
+  CULTURE = 'CULTURE',
+  TOURISM = 'TOURISM',
+  SPORTS = 'SPORTS',
+  BUSINESS = 'BUSINESS',
+  COMMUNITY = 'COMMUNITY',
+  OTHER = 'OTHER',
+}
+
