@@ -15,7 +15,6 @@ import { EventCategory } from '../../shared/enums/event-category.enum';
 import { Role } from '../../shared/enums/role.enum';
 import { RsvpStatus } from '../../shared/enums/rsvp-status.enum';
 import { JwtUser } from '../../shared/interfaces/jwt-user.interface';
-import { enforceCoverageForBusiness } from '../../shared/services/coverage-policy.service';
 import {
   hasSubscriptionFeatureAccess,
   resolveEffectiveSubscriptionPlan,
@@ -77,23 +76,6 @@ export class EventsService implements OnModuleInit, OnModuleDestroy {
 
     if (!canCreateEvent && !isCommunityEvent) {
       throw new ForbiddenException('Only business accounts can add events.');
-    }
-
-    const creator = await this.usersRepository.findOne({
-      where: { id: user.sub },
-      select: {
-        id: true,
-        subscriptionPlan: true,
-      },
-    });
-
-    if (creator && canCreateEvent) {
-      enforceCoverageForBusiness(user.roles, creator.subscriptionPlan, {
-        township: payload.township,
-        district: payload.district,
-        region: payload.region,
-        country: payload.country,
-      });
     }
 
     const startDate = new Date(payload.startDate);
@@ -521,22 +503,6 @@ export class EventsService implements OnModuleInit, OnModuleDestroy {
 
   async update(user: JwtUser, eventId: string, payload: UpdateEventDto) {
     const event = await this.getOwnedEvent(user.sub, eventId);
-    const creator = await this.usersRepository.findOne({
-      where: { id: user.sub },
-      select: {
-        id: true,
-        subscriptionPlan: true,
-      },
-    });
-
-    if (creator) {
-      enforceCoverageForBusiness(user.roles, creator.subscriptionPlan, {
-        township: payload.township ?? event.township,
-        district: payload.district ?? event.district,
-        region: payload.region ?? event.region,
-        country: payload.country ?? event.country,
-      });
-    }
 
     if (payload.title !== undefined) {
       event.title = payload.title;

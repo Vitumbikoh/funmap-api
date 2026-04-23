@@ -1,4 +1,14 @@
-import { Body, Controller, Get, Post, Query, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  ParseUUIDPipe,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { CurrentUser } from '../../shared/decorators/current-user.decorator';
 import { GeoQueryDto } from '../../shared/dto/geo-query.dto';
 import { JwtAuthGuard } from '../../shared/guards/jwt-auth.guard';
@@ -37,5 +47,13 @@ export class ReelsController {
   create(@CurrentUser() user: JwtUser, @Body() payload: CreateReelDto) {
     return this.reelsService.create(user, payload);
   }
-}
 
+  @Delete(':id')
+  @UseGuards(JwtAuthGuard)
+  remove(
+    @CurrentUser() user: JwtUser,
+    @Param('id', new ParseUUIDPipe()) id: string,
+  ) {
+    return this.reelsService.remove(user, id);
+  }
+}

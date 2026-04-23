@@ -139,6 +139,11 @@ export class FeedService {
             p.caption AS title,
             p.media_ids AS "mediaIds",
             p.created_at AS "createdAt",
+            p.author_id AS "authorId",
+            COALESCE(NULLIF(post_author.business_name, ''), NULLIF(post_author.display_name, ''), NULLIF(post_author.username, ''), 'FunMap User') AS "authorName",
+            post_author.avatar_url AS "authorAvatarUrl",
+            post_author.roles AS "authorRoles",
+            post_author.is_verified AS "authorVerified",
             p.like_count AS "likeCount",
             p.comment_count AS "commentCount",
             p.share_count AS "shareCount",
@@ -151,6 +156,7 @@ export class FeedService {
               GREATEST(0, 24 - EXTRACT(EPOCH FROM (NOW() - p.created_at)) / 3600)
             ) * COALESCE(post_promo.boost_multiplier, 1) AS score
           FROM posts p
+          LEFT JOIN users post_author ON post_author.id = p.author_id
           LEFT JOIN LATERAL (
             SELECT promo.boost_multiplier
             FROM promotions promo
@@ -176,6 +182,11 @@ export class FeedService {
             r.caption AS title,
             ARRAY[r.media_id] AS "mediaIds",
             r.created_at AS "createdAt",
+            r.author_id AS "authorId",
+            COALESCE(NULLIF(reel_author.business_name, ''), NULLIF(reel_author.display_name, ''), NULLIF(reel_author.username, ''), 'FunMap User') AS "authorName",
+            reel_author.avatar_url AS "authorAvatarUrl",
+            reel_author.roles AS "authorRoles",
+            reel_author.is_verified AS "authorVerified",
             r.like_count AS "likeCount",
             r.comment_count AS "commentCount",
             r.share_count AS "shareCount",
@@ -189,6 +200,7 @@ export class FeedService {
               GREATEST(0, 24 - EXTRACT(EPOCH FROM (NOW() - r.created_at)) / 3600)
             ) AS score
           FROM reels r
+          LEFT JOIN users reel_author ON reel_author.id = r.author_id
           WHERE ${reelConditions.join(' AND ')}
           ORDER BY score DESC
           LIMIT 20
@@ -203,6 +215,11 @@ export class FeedService {
             e.title,
             e.media_ids AS "mediaIds",
             e.created_at AS "createdAt",
+            e.organizer_id AS "authorId",
+            COALESCE(NULLIF(event_author.business_name, ''), NULLIF(event_author.display_name, ''), NULLIF(event_author.username, ''), NULLIF(e.venue_name, ''), 'FunMap User') AS "authorName",
+            event_author.avatar_url AS "authorAvatarUrl",
+            event_author.roles AS "authorRoles",
+            event_author.is_verified AS "authorVerified",
             COALESCE(event_like_count.value, 0) AS "likeCount",
             COALESCE(event_comment_count.value, 0) AS "commentCount",
             COALESCE(event_share_count.value, 0) AS "shareCount",
@@ -217,6 +234,7 @@ export class FeedService {
               GREATEST(0, 48 - EXTRACT(EPOCH FROM (e.start_date - NOW())) / 3600)
             ) * COALESCE(event_promo.boost_multiplier, 1) AS score
           FROM events e
+          LEFT JOIN users event_author ON event_author.id = e.organizer_id
           LEFT JOIN LATERAL (
             SELECT COUNT(*)::int AS value
             FROM likes l
@@ -309,6 +327,10 @@ export class FeedService {
             p.media_ids AS "mediaIds",
             p.created_at AS "createdAt",
             p.author_id AS "authorId",
+            COALESCE(NULLIF(post_author.business_name, ''), NULLIF(post_author.display_name, ''), NULLIF(post_author.username, ''), 'FunMap User') AS "authorName",
+            post_author.avatar_url AS "authorAvatarUrl",
+            post_author.roles AS "authorRoles",
+            post_author.is_verified AS "authorVerified",
             p.like_count AS "likeCount",
             p.comment_count AS "commentCount",
             p.share_count AS "shareCount",
@@ -320,6 +342,7 @@ export class FeedService {
               GREATEST(0, 24 - EXTRACT(EPOCH FROM (NOW() - p.created_at)) / 3600)
             ) AS score
           FROM posts p
+          LEFT JOIN users post_author ON post_author.id = p.author_id
           WHERE p.author_id = ANY($1)
           ${hasGeo ? 'AND p.location IS NOT NULL AND ST_DWithin(p.location, ST_SetSRID(ST_MakePoint($2, $3), 4326)::geography, $4 * 1000)' : ''}
           ORDER BY p.created_at DESC
@@ -338,6 +361,10 @@ export class FeedService {
             ARRAY[r.media_id] AS "mediaIds",
             r.created_at AS "createdAt",
             r.author_id AS "authorId",
+            COALESCE(NULLIF(reel_author.business_name, ''), NULLIF(reel_author.display_name, ''), NULLIF(reel_author.username, ''), 'FunMap User') AS "authorName",
+            reel_author.avatar_url AS "authorAvatarUrl",
+            reel_author.roles AS "authorRoles",
+            reel_author.is_verified AS "authorVerified",
             r.like_count AS "likeCount",
             r.comment_count AS "commentCount",
             r.share_count AS "shareCount",
@@ -351,6 +378,7 @@ export class FeedService {
               GREATEST(0, 24 - EXTRACT(EPOCH FROM (NOW() - r.created_at)) / 3600)
             ) AS score
           FROM reels r
+          LEFT JOIN users reel_author ON reel_author.id = r.author_id
           WHERE r.author_id = ANY($1)
           ${hasGeo ? 'AND r.location IS NOT NULL AND ST_DWithin(r.location, ST_SetSRID(ST_MakePoint($2, $3), 4326)::geography, $4 * 1000)' : ''}
           ORDER BY r.created_at DESC
@@ -369,6 +397,10 @@ export class FeedService {
             e.media_ids AS "mediaIds",
             e.created_at AS "createdAt",
             e.organizer_id AS "authorId",
+            COALESCE(NULLIF(event_author.business_name, ''), NULLIF(event_author.display_name, ''), NULLIF(event_author.username, ''), NULLIF(e.venue_name, ''), 'FunMap User') AS "authorName",
+            event_author.avatar_url AS "authorAvatarUrl",
+            event_author.roles AS "authorRoles",
+            event_author.is_verified AS "authorVerified",
             COALESCE(event_like_count.value, 0) AS "likeCount",
             COALESCE(event_comment_count.value, 0) AS "commentCount",
             COALESCE(event_share_count.value, 0) AS "shareCount",
@@ -382,6 +414,7 @@ export class FeedService {
               GREATEST(0, 48 - EXTRACT(EPOCH FROM (e.start_date - NOW())) / 3600)
             ) AS score
           FROM events e
+          LEFT JOIN users event_author ON event_author.id = e.organizer_id
           LEFT JOIN LATERAL (
             SELECT COUNT(*)::int AS value
             FROM likes l

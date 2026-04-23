@@ -30,6 +30,7 @@ import { UpdateProfileDto } from './dto/update-profile.dto';
 import { AdminListUsersQueryDto } from './dto/admin-list-users-query.dto';
 import { AdminUpdateAccountStatusDto } from './dto/admin-update-account-status.dto';
 import { User } from './entities/user.entity';
+import { ContentType } from '../../shared/enums/content-type.enum';
 import {
   assertSubscriptionFeatureAccess,
   buildSubscriptionAccessPayload,
@@ -72,6 +73,87 @@ export class UsersService {
   async getPublicProfile(id: string) {
     const user = await this.findById(id);
     return this.sanitizeUser(user);
+  }
+
+  async getProfilePreview(_viewerId: string, targetUserId: string) {
+    const user = await this.usersRepository.findOne({
+      where: { id: targetUserId },
+      select: {
+        id: true,
+        username: true,
+        displayName: true,
+        avatarUrl: true,
+        businessName: true,
+        businessCategory: true,
+        businessDescription: true,
+        bio: true,
+        roles: true,
+        isVerified: true,
+        township: true,
+        district: true,
+        region: true,
+        country: true,
+        accountStatus: true,
+      },
+    });
+
+    if (!user || user.accountStatus !== AccountStatus.ACTIVE) {
+      throw new NotFoundException('User not found');
+    }
+
+    const [postsCount, reelsCount, eventsCount, posts, reels] = await Promise.all([
+      this.postsRepository.count({
+        where: { authorId: targetUserId, contentType: ContentType.POST },
+      }),
+      this.reelsRepository.count({
+        where: { authorId: targetUserId },
+      }),
+      this.eventsRepository.count({
+        where: { organizerId: targetUserId, isPublished: true },
+      }),
+      this.postsRepository.find({
+        where: { authorId: targetUserId, contentType: ContentType.POST },
+        order: { createdAt: 'DESC' },
+        take: 60,
+      }),
+      this.reelsRepository.find({
+        where: { authorId: targetUserId },
+        order: { createdAt: 'DESC' },
+        take: 60,
+      }),
+    ]);
+
+    return {
+      profile: this.buildProfilePreview(user),
+      stats: {
+        postsCount,
+        reelsCount,
+        eventsCount,
+      },
+      gallery: {
+        posts: posts.map((post) => ({
+          id: post.id,
+          caption: post.caption,
+          mediaIds: post.mediaIds,
+          createdAt: post.createdAt,
+          likeCount: post.likeCount,
+          commentCount: post.commentCount,
+          shareCount: post.shareCount,
+        })),
+        reels: reels.map((reel) => ({
+          id: reel.id,
+          caption: reel.caption,
+          mediaId: reel.mediaId,
+          thumbnailMediaId: reel.thumbnailMediaId,
+          durationSeconds: reel.durationSeconds,
+          createdAt: reel.createdAt,
+          likeCount: reel.likeCount,
+          commentCount: reel.commentCount,
+          shareCount: reel.shareCount,
+          viewCount: reel.viewCount,
+        })),
+      },
+    };
   }
 
   async findNearbyUsers(userId: string, query: GeoQueryDto) {
@@ -967,6 +1049,47 @@ export class UsersService {
     return {
       ...safeUser,
       subscriptionAccess: buildSubscriptionAccessPayload(user),
+    };
+  }
+
+  private buildProfilePreview(
+    user: Pick<
+      User,
+      | 'id'
+      | 'username'
+      | 'displayName'
+      | 'avatarUrl'
+      | 'businessName'
+      | 'businessCategory'
+      | 'businessDescription'
+      | 'bio'
+      | 'roles'
+      | 'isVerified'
+      | 'township'
+      | 'district'
+      | 'region'
+      | 'country'
+    >,
+  ) {
+    return {
+      id: user.id,
+      displayName:
+        user.businessName?.trim() ||
+        user.displayName?.trim() ||
+        user.username?.trim() ||
+        'FunMap User',
+      username: user.username ?? null,
+      avatarUrl: user.avatarUrl ?? null,
+      about: user.businessDescription?.trim() || user.bio?.trim() || null,
+      bio: user.bio ?? null,
+      businessDescription: user.businessDescription ?? null,
+      businessCategory: user.businessCategory ?? null,
+      roles: user.roles ?? [],
+      isVerified: user.isVerified,
+      township: user.township ?? null,
+      district: user.district ?? null,
+      region: user.region ?? null,
+      country: user.country ?? null,
     };
   }
 

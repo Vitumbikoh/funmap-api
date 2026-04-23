@@ -125,11 +125,18 @@ export class PostsService implements OnModuleInit, OnModuleDestroy {
       `
         SELECT
           p.*,
+          p.author_id AS "authorId",
+          COALESCE(NULLIF(u.business_name, ''), NULLIF(u.display_name, ''), NULLIF(u.username, ''), 'FunMap User') AS "authorName",
+          u.username AS "authorUsername",
+          u.avatar_url AS "authorAvatarUrl",
+          u.roles AS "authorRoles",
+          u.is_verified AS "authorVerified",
           ST_Distance(
             p.location,
             ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography
           ) / 1000 AS distance_km
         FROM posts p
+        INNER JOIN users u ON u.id = p.author_id
         WHERE p.location IS NOT NULL
           AND p.content_type = 'POST'
           AND ST_DWithin(
@@ -303,4 +310,3 @@ export class PostsService implements OnModuleInit, OnModuleDestroy {
     });
   }
 }
-

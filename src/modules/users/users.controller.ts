@@ -96,6 +96,14 @@ export class UsersController {
     return this.usersService.getFunOclockPreferences(user.sub);
   }
 
+  @Get(':id/profile-preview')
+  getProfilePreview(
+    @CurrentUser() user: JwtUser,
+    @Param('id', new ParseUUIDPipe()) id: string,
+  ) {
+    return this.usersService.getProfilePreview(user.sub, id);
+  }
+
   @Patch('me/fun-oclock')
   updateMyFunOclock(
     @CurrentUser() user: JwtUser,

@@ -1,4 +1,8 @@
-import { Injectable } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Point } from 'geojson';
 import { Repository } from 'typeorm';
@@ -67,11 +71,18 @@ export class ReelsService {
       `
         SELECT
           r.*,
+          r.author_id AS "authorId",
+          COALESCE(NULLIF(u.business_name, ''), NULLIF(u.display_name, ''), NULLIF(u.username, ''), 'FunMap User') AS "authorName",
+          u.username AS "authorUsername",
+          u.avatar_url AS "authorAvatarUrl",
+          u.roles AS "authorRoles",
+          u.is_verified AS "authorVerified",
           ST_Distance(
             r.location,
             ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography
           ) / 1000 AS distance_km
         FROM reels r
+        INNER JOIN users u ON u.id = r.author_id
         WHERE r.location IS NOT NULL
           AND ST_DWithin(
             r.location,
@@ -108,6 +119,12 @@ export class ReelsService {
       `
         SELECT
           r.*,
+          r.author_id AS "authorId",
+          COALESCE(NULLIF(u.business_name, ''), NULLIF(u.display_name, ''), NULLIF(u.username, ''), 'FunMap User') AS "authorName",
+          u.username AS "authorUsername",
+          u.avatar_url AS "authorAvatarUrl",
+          u.roles AS "authorRoles",
+          u.is_verified AS "authorVerified",
           (
             (
               (r.like_count * 1) +
@@ -120,6 +137,7 @@ export class ReelsService {
             GREATEST(1, EXTRACT(EPOCH FROM (NOW() - r.created_at)) / 3600)
           ) AS velocity_score
         FROM reels r
+        INNER JOIN users u ON u.id = r.author_id
         WHERE TRUE
           ${geoFilter}
         ORDER BY velocity_score DESC, r.created_at DESC
@@ -187,6 +205,12 @@ export class ReelsService {
       `
         SELECT
           r.*,
+          r.author_id AS "authorId",
+          COALESCE(NULLIF(u.business_name, ''), NULLIF(u.display_name, ''), NULLIF(u.username, ''), 'FunMap User') AS "authorName",
+          u.username AS "authorUsername",
+          u.avatar_url AS "authorAvatarUrl",
+          u.roles AS "authorRoles",
+          u.is_verified AS "authorVerified",
           (
             (r.like_count * 1) +
             (r.comment_count * 2) +
@@ -199,6 +223,7 @@ export class ReelsService {
             GREATEST(0, 24 - EXTRACT(EPOCH FROM (NOW() - r.created_at)) / 3600)
           ) AS for_you_score
         FROM reels r
+        INNER JOIN users u ON u.id = r.author_id
         WHERE r.author_id <> $1
         ORDER BY for_you_score DESC, r.created_at DESC
         LIMIT 50
@@ -218,5 +243,29 @@ export class ReelsService {
       items,
       total: items.length,
     };
+  }
+
+  async remove(user: JwtUser, reelId: string) {
+    const reel = await this.getOwnedReel(user.sub, reelId);
+    await this.reelsRepository.remove(reel);
+
+    return {
+      id: reelId,
+      deleted: true,
+    };
+  }
+
+  private async getOwnedReel(userId: string, reelId: string) {
+    const reel = await this.reelsRepository.findOne({ where: { id: reelId } });
+
+    if (!reel) {
+      throw new NotFoundException('Reel not found');
+    }
+
+    if (reel.authorId !== userId) {
+      throw new ForbiddenException('You can only modify your own reels');
+    }
+
+    return reel;
   }
 }
