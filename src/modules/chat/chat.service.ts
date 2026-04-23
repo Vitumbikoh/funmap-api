@@ -322,6 +322,9 @@ export class ChatService {
             WHEN cr.type = 'EVENT' THEN COALESCE(NULLIF(cr.title, ''), CONCAT(COALESCE(event.title, 'Event'), ' Chat'))
             ELSE COALESCE(cr.title, 'Chat Room')
           END AS title,
+          other_user.id AS "otherUserId",
+          other_user.username AS "otherUsername",
+          other_user.avatar_url AS "otherUserAvatarUrl",
           cp.last_read_at AS "lastReadAt",
           COALESCE(
             COUNT(m.id) FILTER (
@@ -333,7 +336,7 @@ export class ChatService {
         FROM chat_rooms cr
         INNER JOIN chat_participants cp ON cp.room_id = cr.id
         LEFT JOIN LATERAL (
-          SELECT u.display_name, u.username
+          SELECT u.id, u.display_name, u.username, u.avatar_url
           FROM chat_participants cp_other
           INNER JOIN users u ON u.id = cp_other.user_id
           WHERE cp_other.room_id = cr.id
@@ -353,8 +356,10 @@ export class ChatService {
           cr.last_message_at,
           cr.title,
           cp.last_read_at,
+          other_user.id,
           other_user.display_name,
           other_user.username,
+          other_user.avatar_url,
           event.title
         ORDER BY cr.last_message_at DESC NULLS LAST, cr.created_at DESC
       `,
@@ -459,10 +464,10 @@ export class ChatService {
           recipient.userId,
           NotificationType.CHAT,
           room.type === ChatRoomType.EVENT
-            ? 'New message in ${room.title ?? 'Event chat'}'
-            : 'New message from ${sender?.displayName ?? sender?.username ?? 'FunMap user'}',
+            ? `New message in ${room.title ?? 'Event chat'}`
+            : `New message from ${sender?.displayName ?? sender?.username ?? 'FunMap user'}`,
           room.type === ChatRoomType.EVENT
-            ? '${sender?.displayName ?? sender?.username ?? 'Someone'}: ${payload.body?.slice(0, 160) ?? 'Sent a media message.'}'
+            ? `${sender?.displayName ?? sender?.username ?? 'Someone'}: ${payload.body?.slice(0, 160) ?? 'Sent a media message.'}`
             : payload.body?.slice(0, 160) ?? 'You received a media message.',
           {
             roomId,

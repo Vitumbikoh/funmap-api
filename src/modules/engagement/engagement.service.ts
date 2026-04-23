@@ -503,7 +503,7 @@ export class EngagementService {
   }
 
   private async buildTargetNotificationDetails(targetType: string, targetId: string) {
-    if (targetType == ContentTarget.EVENT && targetId.isNotEmpty) {
+    if (targetType == ContentTarget.EVENT && targetId.length > 0) {
       const event = await this.eventsRepository.findOne({
         where: { id: targetId },
         select: { id: true, title: true },
@@ -514,7 +514,7 @@ export class EngagementService {
       };
     }
 
-    if (targetType == ContentTarget.POST && targetId.isNotEmpty) {
+    if (targetType == ContentTarget.POST && targetId.length > 0) {
       const post = await this.postsRepository.findOne({
         where: { id: targetId },
         select: { id: true, caption: true },
@@ -525,7 +525,7 @@ export class EngagementService {
       };
     }
 
-    if (targetType == ContentTarget.REEL && targetId.isNotEmpty) {
+    if (targetType == ContentTarget.REEL && targetId.length > 0) {
       const reel = await this.reelsRepository.findOne({
         where: { id: targetId },
         select: { id: true, caption: true },
@@ -544,7 +544,7 @@ export class EngagementService {
 
   private compact(value?: string | null, maxLength = 60) {
     const normalized = value?.trim();
-    if (normalized == null || normalized.isEmpty) {
+    if (normalized == null || normalized.length == 0) {
       return null;
     }
 

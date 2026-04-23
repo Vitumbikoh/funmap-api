@@ -529,7 +529,7 @@ export class EventsService implements OnModuleInit, OnModuleDestroy {
         },
       });
 
-      final attendeeName =
+      const attendeeName =
           attendee?.displayName ?? attendee?.username ?? 'A user';
 
       await this.notificationsService.createNotification(

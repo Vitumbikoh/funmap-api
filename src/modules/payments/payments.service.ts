@@ -717,7 +717,12 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
         },
       );
 
-      await this.notifyOrganizerAboutEventPayment(result);
+      await this.notifyOrganizerAboutEventPayment({
+        eventId: result.eventId ?? null,
+        status: result.status,
+        paymentId: result.paymentId,
+        userId: result.userId,
+      });
     }
 
     return { received: true, status: result.status, idempotent: result.idempotent };
@@ -753,7 +758,12 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
             },
           );
 
-          await this.notifyOrganizerAboutEventPayment(syncResult);
+          await this.notifyOrganizerAboutEventPayment({
+            eventId: syncResult.eventId ?? null,
+            status: syncResult.status,
+            paymentId: syncResult.paymentId,
+            userId: syncResult.userId,
+          });
         }
       }
     }
