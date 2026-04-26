@@ -9,7 +9,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Point } from 'geojson';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { EventLifecycleStatus } from '../../shared/enums/event-lifecycle-status.enum';
 import { EventCategory } from '../../shared/enums/event-category.enum';
 import { NotificationType } from '../../shared/enums/notification-type.enum';
@@ -32,6 +32,7 @@ import { Event } from './entities/event.entity';
 import { Rsvp } from './entities/rsvp.entity';
 import { User } from '../users/entities/user.entity';
 import { NotificationsService } from '../notifications/notifications.service';
+import { Media } from '../media/entities/media.entity';
 
 type EventListItem = Record<string, unknown>;
 type AttendeeItem = Record<string, unknown>;
@@ -48,6 +49,8 @@ export class EventsService implements OnModuleInit, OnModuleDestroy {
     private readonly rsvpRepository: Repository<Rsvp>,
     @InjectRepository(User)
     private readonly usersRepository: Repository<User>,
+    @InjectRepository(Media)
+    private readonly mediaRepository: Repository<Media>,
     private readonly notificationsService: NotificationsService,
   ) {}
 
@@ -117,11 +120,12 @@ export class EventsService implements OnModuleInit, OnModuleDestroy {
       country: payload.country,
     });
 
-    return this.eventsRepository.save(event);
+    const saved = await this.eventsRepository.save(event);
+    return this.attachPrimaryMediaUrl({ ...saved });
   }
 
   async findPendingCommunityEvents() {
-    return this.eventsRepository.query(
+    const items = (await this.eventsRepository.query(
       `
         SELECT
           e.*,
@@ -138,7 +142,9 @@ export class EventsService implements OnModuleInit, OnModuleDestroy {
         ORDER BY e.created_at DESC
       `,
       [EventCategory.COMMUNITY, EventLifecycleStatus.CANCELLED],
-    );
+    )) as EventListItem[];
+
+    return this.attachPrimaryMediaUrls(items);
   }
 
   async findOne(eventId: string) {
@@ -163,7 +169,7 @@ export class EventsService implements OnModuleInit, OnModuleDestroy {
       },
     });
 
-    return {
+    return this.attachPrimaryMediaUrl({
       ...event,
       organizerDisplayName: organizer?.displayName ?? null,
       organizerUsername: organizer?.username ?? null,
@@ -171,7 +177,7 @@ export class EventsService implements OnModuleInit, OnModuleDestroy {
       taxiPhoneNumber: organizer?.taxiPhoneNumber ?? null,
       taxiWhatsappNumber: organizer?.taxiWhatsappNumber ?? null,
       transportNotes: organizer?.transportNotes ?? null,
-    };
+    });
   }
 
   async findNearby(user: JwtUser, query: NearbyEventsQueryDto) {
@@ -265,7 +271,7 @@ export class EventsService implements OnModuleInit, OnModuleDestroy {
       ? `CASE WHEN LOWER(COALESCE(e.mood_tag, '')) = $${moodOrderParameterIndex} THEN 1 ELSE 0 END DESC,`
       : '';
 
-    return this.eventsRepository.query(
+    const items = (await this.eventsRepository.query(
       `
         SELECT
           e.*,
@@ -331,7 +337,9 @@ export class EventsService implements OnModuleInit, OnModuleDestroy {
         LIMIT 50
       `,
       params,
-    );
+    )) as EventListItem[];
+
+    return this.attachPrimaryMediaUrls(items);
   }
 
   async findMine(user: JwtUser) {
@@ -356,7 +364,7 @@ export class EventsService implements OnModuleInit, OnModuleDestroy {
     )) as EventListItem[];
 
     return {
-      items,
+      items: await this.attachPrimaryMediaUrls(items),
       summary: {
         total: items.length,
         upcoming: items.filter(
@@ -468,7 +476,13 @@ export class EventsService implements OnModuleInit, OnModuleDestroy {
   }
 
   async rsvp(user: JwtUser, eventId: string) {
-    const event = await this.findOne(eventId);
+    const event = await this.eventsRepository.findOne({
+      where: { id: eventId },
+    });
+    if (!event) {
+      throw new NotFoundException('Event not found');
+    }
+
     const alreadyHadBooking = await this.rsvpRepository.findOne({
       where: {
         eventId,
@@ -650,11 +664,18 @@ export class EventsService implements OnModuleInit, OnModuleDestroy {
       event.isPublished = false;
     }
 
-    return this.eventsRepository.save(event);
+    const saved = await this.eventsRepository.save(event);
+    return this.attachPrimaryMediaUrl({ ...saved });
   }
 
   async reviewCommunityEvent(eventId: string, approved: boolean) {
-    const event = await this.findOne(eventId);
+    const event = await this.eventsRepository.findOne({
+      where: { id: eventId },
+    });
+
+    if (!event) {
+      throw new NotFoundException('Event not found');
+    }
 
     if (event.category !== EventCategory.COMMUNITY) {
       throw new BadRequestException('Only COMMUNITY events require review.');
@@ -697,13 +718,95 @@ export class EventsService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async getOwnedEvent(userId: string, eventId: string) {
-    const event = await this.findOne(eventId);
+    const event = await this.eventsRepository.findOne({
+      where: { id: eventId },
+    });
+
+    if (!event) {
+      throw new NotFoundException('Event not found');
+    }
 
     if (event.organizerId !== userId) {
       throw new ForbiddenException('You can only modify your own events');
     }
 
     return event;
+  }
+
+  private async attachPrimaryMediaUrls(
+    items: EventListItem[],
+  ): Promise<Array<EventListItem & { imageUrl?: string }>> {
+    if (!items.length) {
+      return [];
+    }
+
+    const firstMediaIds = items
+      .map((item) => this.readFirstMediaId(item))
+      .filter((id): id is string => id != null);
+
+    if (!firstMediaIds.length) {
+      return items.map((item) => ({ ...item }));
+    }
+
+    const media = await this.mediaRepository.findBy({
+      id: In(firstMediaIds),
+    });
+    const mediaUrlById = new Map(
+      media.map((entry) => [entry.id, entry.secureUrl] as const),
+    );
+
+    return items.map((item) => {
+      const firstMediaId = this.readFirstMediaId(item);
+      const imageUrl =
+        this.readExistingImageUrl(item) ??
+        (firstMediaId != null ? mediaUrlById.get(firstMediaId) : undefined);
+
+      return imageUrl != null && imageUrl.trim().length > 0
+        ? { ...item, imageUrl }
+        : { ...item };
+    });
+  }
+
+  private async attachPrimaryMediaUrl(
+    item: EventListItem,
+  ): Promise<EventListItem & { imageUrl?: string }> {
+    const [resolved] = await this.attachPrimaryMediaUrls([item]);
+    return resolved;
+  }
+
+  private readExistingImageUrl(item: EventListItem): string | undefined {
+    const candidates = [
+      item['imageUrl'],
+      item['image_url'],
+      item['coverImageUrl'],
+      item['cover_image_url'],
+      item['posterUrl'],
+      item['poster_url'],
+      item['bannerUrl'],
+      item['banner_url'],
+      item['thumbnailUrl'],
+      item['thumbnail_url'],
+    ];
+
+    for (const candidate of candidates) {
+      if (typeof candidate === 'string' && candidate.trim().length > 0) {
+        return candidate.trim();
+      }
+    }
+
+    return undefined;
+  }
+
+  private readFirstMediaId(item: EventListItem): string | undefined {
+    const mediaIds = item['mediaIds'] ?? item['media_ids'];
+    if (!Array.isArray(mediaIds) || !mediaIds.length) {
+      return undefined;
+    }
+
+    const first = mediaIds[0];
+    return typeof first === 'string' && first.trim().length > 0
+      ? first.trim()
+      : undefined;
   }
 
   private deriveStatus(startDate: Date, endDate: Date) {
