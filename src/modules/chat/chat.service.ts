@@ -247,6 +247,7 @@ export class ChatService {
       where: { id: eventId },
       select: {
         id: true,
+        organizerId: true,
         title: true,
       },
     });
@@ -255,16 +256,21 @@ export class ChatService {
       throw new NotFoundException('Event not found');
     }
 
-    const rsvp = await this.rsvpRepository.findOne({
-      where: {
-        eventId,
-        userId: user.sub,
-      },
-    });
+    const isOrganizer = event.organizerId === user.sub;
+    if (!isOrganizer) {
+      const rsvp = await this.rsvpRepository.findOne({
+        where: {
+          eventId,
+          userId: user.sub,
+        },
+      });
 
-    if (!rsvp || rsvp.status !== RsvpStatus.CONFIRMED) {
-      throw new ForbiddenException('Event chat is locked until access is confirmed');
+      if (!rsvp || rsvp.status !== RsvpStatus.CONFIRMED) {
+        throw new ForbiddenException('Event chat is locked until access is confirmed');
+      }
     }
+
+    const expectedTitle = `${event.title} Chat`;
 
     let room = await this.roomsRepository.findOne({
       where: {
@@ -278,12 +284,12 @@ export class ChatService {
         this.roomsRepository.create({
           type: ChatRoomType.EVENT,
           eventId,
-          title: '${event.title} Chat',
+          title: expectedTitle,
           createdByUserId: user.sub,
         }),
       );
-    } else if (room.title?.trim() != '${event.title} Chat') {
-      room.title = '${event.title} Chat';
+    } else if (room.title?.trim() !== expectedTitle) {
+      room.title = expectedTitle;
       room = await this.roomsRepository.save(room);
     }
 
